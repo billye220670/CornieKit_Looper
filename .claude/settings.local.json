@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet new:*)",
+      "Bash(dotnet sln add:*)",
+      "Bash(dotnet add package:*)",
+      "Bash(dotnet add reference:*)",
+      "Bash(dotnet build:*)",
+      "Bash(Select-String -Pattern \"error\")",
+      "Bash(ls:*)",
+      "Bash(git -C \"C:\\\\Users\\\\Tintt\\\\Documents\\\\CornieKit_Looper\" status)",
+      "Bash(test:*)",
+      "Bash(git -C:*)",
+      "Bash(gh repo create:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh repo list:*)",
+      "Bash(dir \"C:\\\\Users\\\\Tintt\\\\Documents\\\\CornieKit_Looper\" /a /b)"
+    ]
+  }
+}
