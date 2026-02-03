@@ -24,13 +24,13 @@ A Windows video player for marking and looping video segments. Perfect for pract
 ## Installation
 
 ### Option 1: Download Release
-Download the latest release from [Releases](https://github.com/YourUsername/CornieKit_Looper/releases).
+Download the latest release from [Releases](https://github.com/billye220670/CornieKit_Looper/releases).
 
 ### Option 2: Build from Source
 Requires .NET 8.0 SDK.
 
 ```bash
-git clone https://github.com/YourUsername/CornieKit_Looper.git
+git clone https://github.com/billye220670/CornieKit_Looper.git
 cd CornieKit_Looper
 dotnet build -c Release
 ```
