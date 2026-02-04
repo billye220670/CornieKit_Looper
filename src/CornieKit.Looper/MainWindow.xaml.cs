@@ -15,9 +15,11 @@ public partial class MainWindow : Window
     private LoopSegmentViewModel? _pendingRenameSegment;
     private DispatcherTimer? _hideControlsTimer;
     private bool _isSidePanelVisible;
+    private bool _isMenuButtonVisible;
     private bool _isBottomPanelVisible;
+    private bool _isMouseOverMenuButton;
     private bool _isMouseOverBottomPanel;
-    private const int HideDelayMs = 3000; // YouTube 风格：3秒后隐藏
+    private const int HideDelayMs = 1000; // 1秒后自动隐藏
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -45,40 +47,19 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(HideDelayMs)
         };
         _hideControlsTimer.Tick += HideControlsTimer_Tick;
-
-        // 监听播放状态变化，暂停时保持控制栏显示
-        _viewModel.PropertyChanged += ViewModel_PropertyChanged;
-    }
-
-    private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(MainViewModel.IsPlaying))
-        {
-            if (!_viewModel.IsPlaying)
-            {
-                // 暂停时停止隐藏计时器，保持控制栏显示
-                _hideControlsTimer?.Stop();
-                ShowBottomPanel();
-            }
-            else
-            {
-                // 恢复播放时重新开始计时
-                ResetHideTimer();
-            }
-        }
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Focus();
-        // 初始显示控制栏
+        // 初始显示菜单按钮和底部控制栏
+        ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.Dispose();
     }
 
@@ -87,15 +68,11 @@ public partial class MainWindow : Window
         // Tab 键切换右侧面板
         if (e.Key == Key.Tab)
         {
-            System.Diagnostics.Debug.WriteLine($"[PreviewKeyDown] Tab pressed, Focused: {Keyboard.FocusedElement?.GetType().Name ?? "null"}");
-
             if (Keyboard.FocusedElement is TextBox)
             {
-                System.Diagnostics.Debug.WriteLine("[PreviewKeyDown] Tab ignored - TextBox has focus");
                 return;
             }
 
-            System.Diagnostics.Debug.WriteLine("[PreviewKeyDown] Calling ToggleSidePanel");
             ToggleSidePanel();
 
             // 清除焦点，避免显示虚线框
@@ -108,11 +85,8 @@ public partial class MainWindow : Window
 
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
     {
-        // 记录焦点元素
-        var focusedElement = Keyboard.FocusedElement;
-        System.Diagnostics.Debug.WriteLine($"[KeyDown] Key: {e.Key}, Focused: {focusedElement?.GetType().Name ?? "null"}");
-
         // 任何按键活动都显示控制栏
+        ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
 
@@ -124,13 +98,11 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Space && !e.IsRepeat)
         {
             // 如果焦点在TextBox上，不处理空格键
-            if (focusedElement is TextBox)
+            if (Keyboard.FocusedElement is TextBox)
             {
-                System.Diagnostics.Debug.WriteLine("[KeyDown] Space ignored - TextBox has focus");
                 return;
             }
 
-            System.Diagnostics.Debug.WriteLine("[KeyDown] Space handled - toggling play/pause");
             _viewModel.TogglePlayPauseCommand.Execute(null);
             e.Handled = true;
         }
@@ -168,7 +140,7 @@ public partial class MainWindow : Window
     private void MainWindow_MouseMove(object sender, MouseEventArgs e)
     {
         // Window 级别的鼠标移动 → 显示控制栏
-        System.Diagnostics.Debug.WriteLine($"[Window] MouseMove - BottomVisible: {_isBottomPanelVisible}");
+        ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
     }
@@ -176,7 +148,7 @@ public partial class MainWindow : Window
     private void VideoOverlay_MouseMove(object sender, MouseEventArgs e)
     {
         // 鼠标在视频区域内移动 → 显示控制栏
-        System.Diagnostics.Debug.WriteLine($"[VideoOverlay] MouseMove - BottomVisible: {_isBottomPanelVisible}");
+        ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
     }
@@ -187,16 +159,46 @@ public partial class MainWindow : Window
         ResetHideTimer();
     }
 
+    private void TopHoverZone_MouseEnter(object sender, MouseEventArgs e)
+    {
+        ShowMenuButton();
+        ShowBottomPanel();
+        ResetHideTimer();
+    }
+
+    private void TopHoverZone_MouseMove(object sender, MouseEventArgs e)
+    {
+        ShowMenuButton();
+        ShowBottomPanel();
+        ResetHideTimer();
+    }
+
+    private void TopPanel_MouseEnter(object sender, MouseEventArgs e)
+    {
+        // 鼠标在菜单按钮上 → 停止隐藏计时，保持显示
+        _isMouseOverMenuButton = true;
+        _hideControlsTimer?.Stop();
+        ShowMenuButton();
+        ShowBottomPanel();
+    }
+
+    private void TopPanel_MouseLeave(object sender, MouseEventArgs e)
+    {
+        // 鼠标离开菜单按钮 → 重新开始计时
+        _isMouseOverMenuButton = false;
+        ResetHideTimer();
+    }
+
     private void BottomHoverZone_MouseEnter(object sender, MouseEventArgs e)
     {
-        System.Diagnostics.Debug.WriteLine("[BottomHoverZone] MouseEnter");
+        ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
     }
 
     private void BottomHoverZone_MouseMove(object sender, MouseEventArgs e)
     {
-        System.Diagnostics.Debug.WriteLine($"[BottomHoverZone] MouseMove - BottomVisible: {_isBottomPanelVisible}");
+        ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
     }
@@ -204,16 +206,15 @@ public partial class MainWindow : Window
     private void BottomPanel_MouseEnter(object sender, MouseEventArgs e)
     {
         // 鼠标在控制栏上 → 停止隐藏计时，保持显示
-        System.Diagnostics.Debug.WriteLine("[BottomPanel] MouseEnter");
         _isMouseOverBottomPanel = true;
         _hideControlsTimer?.Stop();
+        ShowMenuButton();
         ShowBottomPanel();
     }
 
     private void BottomPanel_MouseLeave(object sender, MouseEventArgs e)
     {
         // 鼠标离开控制栏 → 重新开始计时
-        System.Diagnostics.Debug.WriteLine("[BottomPanel] MouseLeave");
         _isMouseOverBottomPanel = false;
         ResetHideTimer();
     }
@@ -222,15 +223,10 @@ public partial class MainWindow : Window
     {
         _hideControlsTimer?.Stop();
 
-        // 只有在播放状态且鼠标不在控制栏上时才启动隐藏计时
-        if (_viewModel.IsPlaying && !_isMouseOverBottomPanel && !_isDraggingSlider)
+        // 鼠标不在控制栏上且未拖动时启动隐藏计时
+        if (!_isMouseOverMenuButton && !_isMouseOverBottomPanel && !_isDraggingSlider)
         {
-            System.Diagnostics.Debug.WriteLine($"[ResetHideTimer] Starting timer - Playing: {_viewModel.IsPlaying}, MouseOver: {_isMouseOverBottomPanel}, Dragging: {_isDraggingSlider}");
             _hideControlsTimer?.Start();
-        }
-        else
-        {
-            System.Diagnostics.Debug.WriteLine($"[ResetHideTimer] NOT starting timer - Playing: {_viewModel.IsPlaying}, MouseOver: {_isMouseOverBottomPanel}, Dragging: {_isDraggingSlider}");
         }
     }
 
@@ -239,9 +235,30 @@ public partial class MainWindow : Window
         _hideControlsTimer?.Stop();
 
         // 再次检查条件
-        if (_viewModel.IsPlaying && !_isMouseOverBottomPanel && !_isDraggingSlider)
+        if (!_isMouseOverMenuButton && !_isMouseOverBottomPanel && !_isDraggingSlider)
         {
+            HideMenuButton();
             HideBottomPanel();
+        }
+    }
+
+    private void ShowMenuButton()
+    {
+        if (!_isMenuButtonVisible)
+        {
+            _isMenuButtonVisible = true;
+            MenuButton.IsHitTestVisible = true;
+            AnimateOpacity(MenuButton, MenuButton.Opacity, 1, 150);
+        }
+    }
+
+    private void HideMenuButton()
+    {
+        if (_isMenuButtonVisible)
+        {
+            _isMenuButtonVisible = false;
+            MenuButton.IsHitTestVisible = false;
+            AnimateOpacity(MenuButton, MenuButton.Opacity, 0, 300);
         }
     }
 
@@ -249,14 +266,9 @@ public partial class MainWindow : Window
     {
         if (!_isBottomPanelVisible)
         {
-            System.Diagnostics.Debug.WriteLine("[ShowBottomPanel] Showing panel");
             _isBottomPanelVisible = true;
             BottomPanel.IsHitTestVisible = true;
             AnimateOpacity(BottomPanel, BottomPanel.Opacity, 1, 150);
-        }
-        else
-        {
-            System.Diagnostics.Debug.WriteLine("[ShowBottomPanel] Already visible, skipping");
         }
     }
 
@@ -264,14 +276,9 @@ public partial class MainWindow : Window
     {
         if (_isBottomPanelVisible)
         {
-            System.Diagnostics.Debug.WriteLine("[HideBottomPanel] Hiding panel");
             _isBottomPanelVisible = false;
             BottomPanel.IsHitTestVisible = false;  // 立即禁用鼠标事件，让下层的 BottomHoverZone 能接收事件
             AnimateOpacity(BottomPanel, BottomPanel.Opacity, 0, 300);
-        }
-        else
-        {
-            System.Diagnostics.Debug.WriteLine("[HideBottomPanel] Already hidden, skipping");
         }
     }
 
@@ -448,6 +455,16 @@ public partial class MainWindow : Window
     private void Exit_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void MenuButton_Click(object sender, RoutedEventArgs e)
+    {
+        MenuPopup.IsOpen = !MenuPopup.IsOpen;
+    }
+
+    private void MenuPopup_ItemClick(object sender, RoutedEventArgs e)
+    {
+        MenuPopup.IsOpen = false;
     }
 
     private void About_Click(object sender, RoutedEventArgs e)

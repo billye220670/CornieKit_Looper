@@ -37,7 +37,7 @@ public class VideoPlayerService : IDisposable
         var options = new[]
         {
             "--aout=mmdevice",
-            "--audio-resampler=soxr",
+            "--audio-resampler=speex_resampler",
             "--file-caching=300",
             "--no-audio-time-stretch"
         };

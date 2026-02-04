@@ -67,6 +67,34 @@
             </Style.Triggers>
         </Style>
 
+        <!-- 菜单列表项样式：无圆角，淡灰高亮 -->
+        <Style x:Key="MenuItemButton" TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#22FFFFFF"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#33FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- 删除按钮样式 -->
         <Style x:Key="DeleteButton" TargetType="Button">
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
@@ -240,7 +268,7 @@
                         Visibility="{Binding CurrentVideoPath, Converter={StaticResource InverseEmptyStringToVisibilityConverter}}"/>
 
                 <!-- 无视频时的提示 -->
-                <TextBlock Text="Right-click to open video, or drag and drop"
+                <TextBlock Text="Drop video to open"
                            Foreground="#888888"
                            FontSize="16"
                            HorizontalAlignment="Center"
@@ -263,6 +291,34 @@
                                    FontSize="13"/>
                     </StackPanel>
                 </Border>
+
+                <!-- 顶部左侧悬浮触发区域 -->
+                <Border x:Name="TopHoverZone"
+                        VerticalAlignment="Top"
+                        HorizontalAlignment="Left"
+                        Width="100"
+                        Height="80"
+                        Background="#01000000"
+                        MouseEnter="TopHoverZone_MouseEnter"
+                        MouseMove="TopHoverZone_MouseMove"/>
+
+                <!-- 顶部汉堡菜单按钮 (悬浮) -->
+                <Button x:Name="MenuButton"
+                        Style="{StaticResource OverlayButton}"
+                        VerticalAlignment="Top"
+                        HorizontalAlignment="Left"
+                        Margin="20,20,0,0"
+                        Width="40" Height="40"
+                        Opacity="0"
+                        Click="MenuButton_Click"
+                        MouseEnter="TopPanel_MouseEnter"
+                        MouseLeave="TopPanel_MouseLeave">
+                    <Rectangle Width="24" Height="24" Fill="White">
+                        <Rectangle.OpacityMask>
+                            <ImageBrush ImageSource="/Assets/Icons/menu.png"/>
+                        </Rectangle.OpacityMask>
+                    </Rectangle>
+                </Button>
 
                 <!-- 底部悬浮触发区域（使用 #01000000 确保能在 hwnd 上方接收鼠标事件） -->
                 <Border x:Name="BottomHoverZone"
@@ -490,6 +546,71 @@
                 </Border>
             </Grid>
         </vlc:VideoView>
+
+        <!-- 菜单弹出层：直接显示历史记录列表 (放在 VideoView 外部避免 hwnd 坐标问题) -->
+        <Popup x:Name="MenuPopup"
+               PlacementTarget="{Binding ElementName=MenuButton}"
+               Placement="Right"
+               HorizontalOffset="5"
+               VerticalOffset="0"
+               AllowsTransparency="True"
+               StaysOpen="False">
+            <Border Background="#E6000000"
+                    BorderBrush="#33FFFFFF"
+                    BorderThickness="1"
+                    MaxHeight="400">
+                <Border.Effect>
+                    <DropShadowEffect Color="Black" BlurRadius="20" ShadowDepth="4" Opacity="0.7"/>
+                </Border.Effect>
+                <Grid>
+                    <!-- 有历史记录时显示列表 + 清空按钮 -->
+                    <StackPanel Visibility="{Binding HasRecentFiles, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      MaxHeight="320">
+                            <ItemsControl ItemsSource="{Binding RecentFiles}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource MenuItemButton}"
+                                                Command="{Binding DataContext.OpenRecentFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding FilePath}"
+                                                Click="MenuPopup_ItemClick"
+                                                Height="36"
+                                                Width="280"
+                                                HorizontalContentAlignment="Left"
+                                                Padding="12,0"
+                                                ToolTip="{Binding FilePath}">
+                                            <TextBlock Text="{Binding FileName}"
+                                                       Foreground="White"
+                                                       FontSize="12"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <!-- 分割线 -->
+                        <Border Height="1" Background="#33FFFFFF"/>
+                        <!-- 清空历史 -->
+                        <Button Style="{StaticResource MenuItemButton}"
+                                Command="{Binding ClearRecentFilesCommand}"
+                                Click="MenuPopup_ItemClick"
+                                Height="36"
+                                Width="280"
+                                HorizontalContentAlignment="Left"
+                                Padding="12,0">
+                            <TextBlock Text="清空历史" Foreground="#888888" FontSize="12"/>
+                        </Button>
+                    </StackPanel>
+                    <!-- 无历史记录时显示提示 -->
+                    <TextBlock Text="No recent files"
+                               Foreground="#888888"
+                               FontSize="12"
+                               Padding="16,12"
+                               Visibility="{Binding HasRecentFiles, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                </Grid>
+            </Border>
+        </Popup>
 
     </Grid>
 </Window>
