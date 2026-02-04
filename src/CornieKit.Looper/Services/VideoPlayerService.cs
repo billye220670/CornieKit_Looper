@@ -36,11 +36,10 @@ public class VideoPlayerService : IDisposable
 
         var options = new[]
         {
-            "--avcodec-hw=any",
+            "--aout=mmdevice",
+            "--audio-resampler=soxr",
             "--file-caching=300",
-            "--network-caching=300",
-            "--clock-jitter=0",
-            "--clock-synchro=0"
+            "--no-audio-time-stretch"
         };
 
         _libVLC = new LibVLC(options);

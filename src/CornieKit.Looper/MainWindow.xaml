@@ -7,27 +7,31 @@
         xmlns:models="clr-namespace:CornieKit.Looper.Models"
         xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         mc:Ignorable="d"
-        Title="CornieKit Looper - Video Segment Loop Player"
+        Title="CornieKit Looper"
         Height="700" Width="1200"
-        MinHeight="600" MinWidth="900"
-        AllowDrop="True">
+        MinHeight="500" MinWidth="700"
+        AllowDrop="True"
+        Drop="VideoArea_Drop"
+        DragEnter="VideoArea_DragEnter"
+        DragLeave="VideoArea_DragLeave"
+        Background="Black"
+        WindowStyle="SingleBorderWindow">
 
     <Window.Resources>
-        <Style x:Key="ModernButton" TargetType="Button">
-            <Setter Property="Background" Value="#2196F3"/>
+        <!-- 悬浮面板按钮样式 -->
+        <Style x:Key="OverlayButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="15,8"/>
-            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Width" Value="44"/>
+            <Setter Property="Height" Value="44"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="18"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border Background="{TemplateBinding Background}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                CornerRadius="4">
+                                CornerRadius="22">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
@@ -35,20 +39,21 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#1976D2"/>
+                    <Setter Property="Background" Value="#44FFFFFF"/>
                 </Trigger>
                 <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="#0D47A1"/>
+                    <Setter Property="Background" Value="#66FFFFFF"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
 
+        <!-- 删除按钮样式 -->
         <Style x:Key="DeleteButton" TargetType="Button">
-            <Setter Property="Background" Value="#FFCCCC"/>
-            <Setter Property="Foreground" Value="#CC0000"/>
+            <Setter Property="Background" Value="#44FFFFFF"/>
+            <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Width" Value="20"/>
-            <Setter Property="Height" Value="20"/>
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="22"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -56,7 +61,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border Background="{TemplateBinding Background}"
-                                CornerRadius="10">
+                                CornerRadius="11">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
@@ -64,306 +69,354 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FF9999"/>
+                    <Setter Property="Background" Value="#88FF6666"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
 
+        <!-- 片段列表项样式 -->
         <Style x:Key="SegmentListItem" TargetType="ListViewItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-            <Setter Property="Padding" Value="10"/>
-            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="BorderBrush" Value="#33FFFFFF"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
             <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#22FFFFFF"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#33FFFFFF"/>
+                </Trigger>
                 <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                    <Setter Property="Background" Value="#E3F2FD"/>
-                    <Setter Property="BorderBrush" Value="#2196F3"/>
-                    <Setter Property="BorderThickness" Value="2"/>
+                    <Setter Property="Background" Value="#442196F3"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
     </Window.Resources>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <Menu Grid.Row="0" Background="#F5F5F5">
-            <MenuItem Header="File">
-                <MenuItem Header="Open Video..." Command="{Binding OpenVideoCommand}"/>
-                <MenuItem Header="Open Recent" ItemsSource="{Binding RecentFiles}"
-                          IsEnabled="{Binding HasRecentFiles}">
-                    <MenuItem.ItemContainerStyle>
-                        <Style TargetType="MenuItem">
-                            <Setter Property="Header" Value="{Binding FileName}"/>
-                            <Setter Property="ToolTip" Value="{Binding FilePath}"/>
-                            <Setter Property="Command" Value="{Binding DataContext.OpenRecentFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
-                            <Setter Property="CommandParameter" Value="{Binding FilePath}"/>
-                        </Style>
-                    </MenuItem.ItemContainerStyle>
-                </MenuItem>
-                <MenuItem Header="Clear Recent Files"
-                          Command="{Binding ClearRecentFilesCommand}"
-                          Visibility="{Binding HasRecentFiles, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                <Separator/>
-                <MenuItem Header="Exit" Click="Exit_Click"/>
+    <Window.ContextMenu>
+        <ContextMenu>
+            <MenuItem Header="Open Video..." Command="{Binding OpenVideoCommand}"/>
+            <MenuItem Header="Open Recent" ItemsSource="{Binding RecentFiles}"
+                      IsEnabled="{Binding HasRecentFiles}">
+                <MenuItem.ItemContainerStyle>
+                    <Style TargetType="MenuItem">
+                        <Setter Property="Header" Value="{Binding FileName}"/>
+                        <Setter Property="ToolTip" Value="{Binding FilePath}"/>
+                        <Setter Property="Command" Value="{Binding DataContext.OpenRecentFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                        <Setter Property="CommandParameter" Value="{Binding FilePath}"/>
+                    </Style>
+                </MenuItem.ItemContainerStyle>
             </MenuItem>
-            <MenuItem Header="Help">
-                <MenuItem Header="About" Click="About_Click"/>
-            </MenuItem>
-        </Menu>
+            <MenuItem Header="Clear Recent Files"
+                      Command="{Binding ClearRecentFilesCommand}"
+                      Visibility="{Binding HasRecentFiles, Converter={StaticResource BoolToVisibilityConverter}}"/>
+            <Separator/>
+            <MenuItem Header="About" Click="About_Click"/>
+            <Separator/>
+            <MenuItem Header="Exit" Click="Exit_Click"/>
+        </ContextMenu>
+    </Window.ContextMenu>
 
-        <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*"/>
-                <ColumnDefinition Width="5"/>
-                <ColumnDefinition Width="1*" MinWidth="300"/>
-            </Grid.ColumnDefinitions>
+    <Grid x:Name="RootGrid"
+          Background="Transparent">
 
-            <Border Grid.Column="0"
-                    Background="Black"
-                    BorderBrush="{Binding IsRecording, Converter={StaticResource RecordingBorderConverter}}"
-                    BorderThickness="3"
-                    AllowDrop="True"
-                    Drop="VideoArea_Drop"
-                    DragEnter="VideoArea_DragEnter"
-                    DragLeave="VideoArea_DragLeave">
-                <Grid>
-                    <vlc:VideoView x:Name="VideoView"
-                                   MediaPlayer="{Binding MediaPlayer}"/>
+        <!-- VideoView 作为容器，所有 overlay 放在里面 -->
+        <vlc:VideoView x:Name="VideoView"
+                       MediaPlayer="{Binding MediaPlayer}">
+            <Grid Background="Transparent"
+                  MouseMove="VideoOverlay_MouseMove"
+                  MouseLeave="VideoOverlay_MouseLeave">
 
-                    <TextBlock Text="Drop video file here or click File > Open Video"
-                               Foreground="White"
-                               FontSize="18"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               Visibility="{Binding CurrentVideoPath, Converter={StaticResource EmptyStringToVisibilityConverter}}"/>
+                <!-- 无视频时的提示 -->
+                <TextBlock Text="Right-click to open video, or drag and drop"
+                           Foreground="#888888"
+                           FontSize="16"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Visibility="{Binding CurrentVideoPath, Converter={StaticResource EmptyStringToVisibilityConverter}}"/>
 
-                    <Border Background="#FFCC0000"
-                            Padding="10"
-                            CornerRadius="5"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Top"
-                            Margin="0,20,0,0"
-                            Visibility="{Binding IsRecording, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="12" Height="12" Fill="White" Margin="0,0,10,0"/>
-                            <TextBlock Text="RECORDING SEGMENT"
-                                       Foreground="White"
-                                       FontWeight="Bold"
-                                       FontSize="16"/>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-            </Border>
+                <!-- 录制指示器 -->
+                <Border Background="#CC0000"
+                        Padding="12,8"
+                        CornerRadius="6"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,30,0,0"
+                        Visibility="{Binding IsRecording, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="10" Height="10" Fill="White" Margin="0,0,8,0"/>
+                        <TextBlock Text="RECORDING"
+                                   Foreground="White"
+                                   FontWeight="SemiBold"
+                                   FontSize="13"/>
+                    </StackPanel>
+                </Border>
 
-            <GridSplitter Grid.Column="1"
-                          Width="5"
-                          HorizontalAlignment="Stretch"
-                          Background="#E0E0E0"/>
+                <!-- 底部控制面板 (悬浮) -->
+                <Border x:Name="BottomPanel"
+                        VerticalAlignment="Bottom"
+                        Opacity="0"
+                        MouseEnter="BottomPanel_MouseEnter"
+                        MouseLeave="BottomPanel_MouseLeave">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#00000000" Offset="0"/>
+                            <GradientStop Color="#CC000000" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Grid Margin="20,40,20,20">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
 
-            <Border Grid.Column="2"
-                    Background="#FAFAFA"
-                    BorderBrush="#E0E0E0"
-                    BorderThickness="1,0,0,0">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
+                        <!-- 进度条行 -->
+                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                            <Slider x:Name="ProgressSlider"
+                                    Value="{Binding PlaybackPosition, Mode=TwoWay}"
+                                    Minimum="0"
+                                    Maximum="100"
+                                    Height="20"
+                                    VerticalAlignment="Center"
+                                    IsHitTestVisible="False"/>
+                            <Border Background="Transparent"
+                                    MouseLeftButtonDown="SliderOverlay_MouseDown"
+                                    MouseLeftButtonUp="SliderOverlay_MouseUp"
+                                    MouseMove="SliderOverlay_MouseMove"/>
+                        </Grid>
 
-                    <Border Grid.Row="0" Background="#2196F3" Padding="15">
-                        <StackPanel>
-                            <TextBlock Text="Loop Segments"
-                                       Foreground="White"
-                                       FontSize="18"
-                                       FontWeight="Bold"/>
-                            <TextBlock Text="Press and hold R to mark segments"
-                                       Foreground="White"
+                        <!-- 控制按钮行 -->
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 左侧: 播放控制 + 时间 -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Style="{StaticResource OverlayButton}"
+                                        Command="{Binding TogglePlayPauseCommand}">
+                                    <Button.Content>
+                                        <TextBlock FontSize="20">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="▶"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                            <Setter Property="Text" Value="⏸"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Button.Content>
+                                </Button>
+
+                                <TextBlock Foreground="White"
+                                           FontSize="13"
+                                           FontFamily="Consolas"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,0,0">
+                                    <Run Text="{Binding CurrentTimeText, Mode=OneWay}"/>
+                                    <Run Text=" / " Foreground="#888"/>
+                                    <Run Text="{Binding DurationText, Mode=OneWay}"/>
+                                </TextBlock>
+                            </StackPanel>
+
+                            <!-- 中间: 状态信息 -->
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding StatusMessage}"
+                                       Foreground="#AAAAAA"
+                                       FontSize="12"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+
+                            <!-- 右侧: 提示 -->
+                            <TextBlock Grid.Column="2"
+                                       Foreground="#666666"
                                        FontSize="11"
-                                       Opacity="0.9"
-                                       Margin="0,5,0,0"/>
-                        </StackPanel>
-                    </Border>
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0">
+                                <Run Text="R"/>
+                                <Run Text=" record  " Foreground="#555"/>
+                                <Run Text="Tab"/>
+                                <Run Text=" segments" Foreground="#555"/>
+                            </TextBlock>
+                        </Grid>
+                    </Grid>
+                </Border>
 
-                    <ListView Grid.Row="1"
-                              x:Name="SegmentListView"
-                              ItemsSource="{Binding Segments}"
-                              ItemContainerStyle="{StaticResource SegmentListItem}"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                              BorderThickness="0"
-                              Background="White"
-                              MouseDoubleClick="SegmentListView_MouseDoubleClick">
-                        <ListView.ItemTemplate>
-                            <DataTemplate>
+                <!-- 右侧片段面板 (悬浮) -->
+                <Border x:Name="SidePanel"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Stretch"
+                        Width="320"
+                        Visibility="Collapsed">
+                    <Border.Background>
+                        <SolidColorBrush Color="#000000" Opacity="0.85"/>
+                    </Border.Background>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 标题栏 -->
+                        <Border Grid.Row="0" Padding="16,14" BorderBrush="#33FFFFFF" BorderThickness="0,0,0,1">
+                            <Grid>
+                                <TextBlock Text="Loop Segments"
+                                           Foreground="White"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="Tab to hide"
+                                           Foreground="#666666"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- 片段列表 -->
+                        <ListView Grid.Row="1"
+                                  x:Name="SegmentListView"
+                                  ItemsSource="{Binding Segments}"
+                                  ItemContainerStyle="{StaticResource SegmentListItem}"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  BorderThickness="0"
+                                  Background="Transparent"
+                                  MouseDoubleClick="SegmentListView_MouseDoubleClick">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                            <Grid>
+                                                <TextBlock Text="{Binding Name}"
+                                                           Foreground="White"
+                                                           FontWeight="Medium"
+                                                           FontSize="14"
+                                                           MouseLeftButtonDown="SegmentName_MouseLeftButtonDown"
+                                                           Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                                                <TextBox x:Name="RenameTextBox"
+                                                         Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         FontWeight="Medium"
+                                                         FontSize="14"
+                                                         Padding="0"
+                                                         Margin="-2,0,0,0"
+                                                         Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                         LostFocus="RenameTextBox_LostFocus"
+                                                         KeyDown="RenameTextBox_KeyDown"/>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                <TextBlock Text="{Binding TimeRange}"
+                                                           Foreground="#888888"
+                                                           FontSize="12"/>
+                                                <TextBlock Text=" · "
+                                                           Foreground="#666666"
+                                                           FontSize="12"/>
+                                                <TextBlock Text="{Binding DurationText}"
+                                                           Foreground="#888888"
+                                                           FontSize="12"/>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <Button Grid.Column="1"
+                                                Content="✕"
+                                                Style="{StaticResource DeleteButton}"
+                                                VerticalAlignment="Center"
+                                                Command="{Binding DataContext.DeleteSegmentCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="Delete segment"
+                                                Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListViewItem}, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+
+                        <!-- 底部控制 -->
+                        <Border Grid.Row="2" Padding="16,12" BorderBrush="#33FFFFFF" BorderThickness="0,1,0,0">
+                            <StackPanel>
+                                <Button Content="▶ Play All Segments"
+                                        Command="{Binding PlayAllSegmentsCommand}"
+                                        HorizontalAlignment="Stretch"
+                                        Height="36"
+                                        Margin="0,0,0,12"
+                                        Background="#2196F3"
+                                        Foreground="White"
+                                        BorderThickness="0"
+                                        Cursor="Hand">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background" Value="#1976D2"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <Grid>
-                                            <TextBlock Text="{Binding Name}"
-                                                       FontWeight="Bold"
-                                                       FontSize="14"
-                                                       MouseLeftButtonDown="SegmentName_MouseLeftButtonDown"
-                                                       Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
-                                            <TextBox x:Name="RenameTextBox"
-                                                     Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                     FontWeight="Bold"
-                                                     FontSize="14"
-                                                     Padding="0"
-                                                     Margin="-2,0,0,0"
-                                                     Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}"
-                                                     LostFocus="RenameTextBox_LostFocus"
-                                                     KeyDown="RenameTextBox_KeyDown"/>
-                                        </Grid>
-                                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
-                                            <TextBlock Text="{Binding TimeRange}"
-                                                       Foreground="#666"
-                                                       FontSize="12"/>
-                                            <TextBlock Text=" • "
-                                                       Foreground="#666"
-                                                       FontSize="12"/>
-                                            <TextBlock Text="{Binding DurationText}"
-                                                       Foreground="#666"
-                                                       FontSize="12"/>
-                                        </StackPanel>
-                                    </StackPanel>
-
-                                    <Button Grid.Column="1"
-                                            Content="✕"
-                                            Style="{StaticResource DeleteButton}"
-                                            VerticalAlignment="Top"
-                                            Margin="5,0,0,0"
-                                            Command="{Binding DataContext.DeleteSegmentCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
-                                            CommandParameter="{Binding}"
-                                            ToolTip="Delete segment"
-                                            Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListViewItem}, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    <TextBlock Grid.Column="0"
+                                               Text="Loop Mode"
+                                               Foreground="#888888"
+                                               FontSize="12"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,12,0"/>
+                                    <ComboBox Grid.Column="1"
+                                              SelectedValue="{Binding SelectedLoopMode}"
+                                              SelectedValuePath="Tag"
+                                              FontSize="12"
+                                              Background="#222222"
+                                              Foreground="White"
+                                              BorderThickness="0">
+                                        <ComboBoxItem Content="Single (Loop current)" Tag="{x:Static models:LoopMode.Single}"/>
+                                        <ComboBoxItem Content="Sequential" Tag="{x:Static models:LoopMode.Sequential}"/>
+                                        <ComboBoxItem Content="Random" Tag="{x:Static models:LoopMode.Random}"/>
+                                        <ComboBoxItem Content="Sequential Loop" Tag="{x:Static models:LoopMode.SequentialLoop}"/>
+                                    </ComboBox>
                                 </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-
-                    <Border Grid.Row="2" Padding="15" Background="#F5F5F5">
-                        <StackPanel>
-                            <Button Content="▶ Play All Segments"
-                                    Style="{StaticResource ModernButton}"
-                                    Command="{Binding PlayAllSegmentsCommand}"
-                                    HorizontalAlignment="Stretch"
-                                    Margin="0,0,0,10"/>
-
-                        <TextBlock Text="Loop Mode:"
-                                   FontWeight="Bold"
-                                   Margin="0,5,0,5"/>
-                        <ComboBox SelectedValue="{Binding SelectedLoopMode}" SelectedValuePath="Tag" Padding="8" FontSize="13">
-                            <ComboBoxItem Content="Single (Loop current)" Tag="{x:Static models:LoopMode.Single}"/>
-                            <ComboBoxItem Content="Sequential" Tag="{x:Static models:LoopMode.Sequential}"/>
-                            <ComboBoxItem Content="Random" Tag="{x:Static models:LoopMode.Random}"/>
-                            <ComboBoxItem Content="Sequential Loop" Tag="{x:Static models:LoopMode.SequentialLoop}"/>
-                        </ComboBox>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-            </Border>
-        </Grid>
-
-        <Border Grid.Row="2" Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" Padding="15,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Width="40"
-                            Height="40"
-                            FontSize="16"
-                            Command="{Binding TogglePlayPauseCommand}"
-                            Margin="0,0,5,0">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                        <Setter Property="Content">
-                                            <Setter.Value>
-                                                <TextBlock Text="⏸" FontSize="16"/>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsPlaying}" Value="False">
-                                        <Setter Property="Content">
-                                            <Setter.Value>
-                                                <TextBlock Text="▶" FontSize="16"/>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="■"
-                            Width="40"
-                            Height="40"
-                            FontSize="16"
-                            Background="#757575"
-                            Style="{StaticResource ModernButton}"
-                            Command="{Binding StopCommand}"
-                            Margin="0"/>
-                </StackPanel>
-
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            Margin="15,0">
-                    <TextBlock Text="{Binding CurrentTimeText}"
-                               FontSize="14"
-                               FontFamily="Consolas"
-                               VerticalAlignment="Center"/>
-                    <TextBlock Text=" / "
-                               FontSize="14"
-                               VerticalAlignment="Center"
-                               Margin="5,0"/>
-                    <TextBlock Text="{Binding DurationText}"
-                               FontSize="14"
-                               FontFamily="Consolas"
-                               VerticalAlignment="Center"/>
-                </StackPanel>
-
-                <Grid Grid.Column="2" Margin="10,0">
-                    <Slider x:Name="ProgressSlider"
-                            Value="{Binding PlaybackPosition, Mode=TwoWay}"
-                            Minimum="0"
-                            Maximum="100"
-                            Height="25"
-                            VerticalAlignment="Center"
-                            IsHitTestVisible="False"/>
-                    <Border Background="Transparent"
-                            MouseLeftButtonDown="SliderOverlay_MouseDown"
-                            MouseLeftButtonUp="SliderOverlay_MouseUp"
-                            MouseMove="SliderOverlay_MouseMove"/>
-                </Grid>
-
-                <TextBlock Grid.Column="3"
-                           Text="{Binding StatusMessage}"
-                           FontSize="12"
-                           Foreground="#666"
-                           VerticalAlignment="Center"
-                           Margin="15,0,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Border>
             </Grid>
-        </Border>
+        </vlc:VideoView>
 
-        <StatusBar Grid.Row="3" Background="#EEEEEE">
-            <StatusBarItem>
-                <TextBlock Text="{Binding CurrentVideoPath, FallbackValue='No video loaded'}"/>
-            </StatusBarItem>
-        </StatusBar>
     </Grid>
 </Window>

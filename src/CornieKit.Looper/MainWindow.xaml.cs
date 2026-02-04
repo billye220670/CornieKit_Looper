@@ -1,7 +1,8 @@
-﻿using System.IO;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using CornieKit.Looper.ViewModels;
 
@@ -12,6 +13,11 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private DispatcherTimer? _renameTimer;
     private LoopSegmentViewModel? _pendingRenameSegment;
+    private DispatcherTimer? _hideControlsTimer;
+    private bool _isSidePanelVisible;
+    private bool _isBottomPanelVisible;
+    private bool _isMouseOverBottomPanel;
+    private const int HideDelayMs = 3000; // YouTube 风格：3秒后隐藏
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -24,26 +30,81 @@ public partial class MainWindow : Window
         Closing += MainWindow_Closing;
         KeyDown += MainWindow_KeyDown;
         KeyUp += MainWindow_KeyUp;
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
+        MouseMove += MainWindow_MouseMove;
 
         _renameTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(500)
         };
         _renameTimer.Tick += RenameTimer_Tick;
+
+        // YouTube 风格：鼠标停止移动后延迟隐藏
+        _hideControlsTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(HideDelayMs)
+        };
+        _hideControlsTimer.Tick += HideControlsTimer_Tick;
+
+        // 监听播放状态变化，暂停时保持控制栏显示
+        _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.IsPlaying))
+        {
+            if (!_viewModel.IsPlaying)
+            {
+                // 暂停时停止隐藏计时器，保持控制栏显示
+                _hideControlsTimer?.Stop();
+                ShowBottomPanel();
+            }
+            else
+            {
+                // 恢复播放时重新开始计时
+                ResetHideTimer();
+            }
+        }
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Focus();
+        // 初始显示控制栏
+        ShowBottomPanel();
+        ResetHideTimer();
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.Dispose();
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // Tab 键切换右侧面板
+        if (e.Key == Key.Tab)
+        {
+            if (Keyboard.FocusedElement is TextBox)
+                return;
+
+            ToggleSidePanel();
+            e.Handled = true;
+        }
     }
 
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
     {
+        // 记录焦点元素
+        var focusedElement = Keyboard.FocusedElement;
+        System.Diagnostics.Debug.WriteLine($"[KeyDown] Key: {e.Key}, Focused: {focusedElement?.GetType().Name ?? "null"}");
+
+        // 任何按键活动都显示控制栏
+        ShowBottomPanel();
+        ResetHideTimer();
+
         if (e.Key == Key.R && !e.IsRepeat)
         {
             _viewModel.OnRecordKeyDown();
@@ -51,6 +112,14 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Space && !e.IsRepeat)
         {
+            // 如果焦点在TextBox上，不处理空格键
+            if (focusedElement is TextBox)
+            {
+                System.Diagnostics.Debug.WriteLine("[KeyDown] Space ignored - TextBox has focus");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine("[KeyDown] Space handled - toggling play/pause");
             _viewModel.TogglePlayPauseCommand.Execute(null);
             e.Handled = true;
         }
@@ -63,6 +132,144 @@ public partial class MainWindow : Window
             _viewModel.OnRecordKeyUp();
             e.Handled = true;
         }
+    }
+
+    private void ToggleSidePanel()
+    {
+        _isSidePanelVisible = !_isSidePanelVisible;
+
+        if (_isSidePanelVisible)
+        {
+            SidePanel.Visibility = Visibility.Visible;
+            AnimateOpacity(SidePanel, 0, 1, 200);
+        }
+        else
+        {
+            AnimateOpacity(SidePanel, 1, 0, 200, () =>
+            {
+                SidePanel.Visibility = Visibility.Collapsed;
+            });
+        }
+    }
+
+    #region YouTube-style Controls Show/Hide
+
+    private void MainWindow_MouseMove(object sender, MouseEventArgs e)
+    {
+        // Window 级别的鼠标移动 → 显示控制栏
+        System.Diagnostics.Debug.WriteLine($"[Window] MouseMove - BottomVisible: {_isBottomPanelVisible}");
+        ShowBottomPanel();
+        ResetHideTimer();
+    }
+
+    private void VideoOverlay_MouseMove(object sender, MouseEventArgs e)
+    {
+        // 鼠标在视频区域内移动 → 显示控制栏
+        System.Diagnostics.Debug.WriteLine($"[VideoOverlay] MouseMove - BottomVisible: {_isBottomPanelVisible}");
+        ShowBottomPanel();
+        ResetHideTimer();
+    }
+
+    private void VideoOverlay_MouseLeave(object sender, MouseEventArgs e)
+    {
+        // 鼠标离开视频区域 → 开始隐藏计时
+        ResetHideTimer();
+    }
+
+    private void BottomPanel_MouseEnter(object sender, MouseEventArgs e)
+    {
+        // 鼠标在控制栏上 → 停止隐藏计时，保持显示
+        System.Diagnostics.Debug.WriteLine("[BottomPanel] MouseEnter");
+        _isMouseOverBottomPanel = true;
+        _hideControlsTimer?.Stop();
+        ShowBottomPanel();
+    }
+
+    private void BottomPanel_MouseLeave(object sender, MouseEventArgs e)
+    {
+        // 鼠标离开控制栏 → 重新开始计时
+        System.Diagnostics.Debug.WriteLine("[BottomPanel] MouseLeave");
+        _isMouseOverBottomPanel = false;
+        ResetHideTimer();
+    }
+
+    private void ResetHideTimer()
+    {
+        _hideControlsTimer?.Stop();
+
+        // 只有在播放状态且鼠标不在控制栏上时才启动隐藏计时
+        if (_viewModel.IsPlaying && !_isMouseOverBottomPanel && !_isDraggingSlider)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ResetHideTimer] Starting timer - Playing: {_viewModel.IsPlaying}, MouseOver: {_isMouseOverBottomPanel}, Dragging: {_isDraggingSlider}");
+            _hideControlsTimer?.Start();
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine($"[ResetHideTimer] NOT starting timer - Playing: {_viewModel.IsPlaying}, MouseOver: {_isMouseOverBottomPanel}, Dragging: {_isDraggingSlider}");
+        }
+    }
+
+    private void HideControlsTimer_Tick(object? sender, EventArgs e)
+    {
+        _hideControlsTimer?.Stop();
+
+        // 再次检查条件
+        if (_viewModel.IsPlaying && !_isMouseOverBottomPanel && !_isDraggingSlider)
+        {
+            HideBottomPanel();
+        }
+    }
+
+    private void ShowBottomPanel()
+    {
+        if (!_isBottomPanelVisible)
+        {
+            System.Diagnostics.Debug.WriteLine("[ShowBottomPanel] Showing panel");
+            _isBottomPanelVisible = true;
+            BottomPanel.IsHitTestVisible = true;
+            AnimateOpacity(BottomPanel, BottomPanel.Opacity, 1, 150);
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine("[ShowBottomPanel] Already visible, skipping");
+        }
+    }
+
+    private void HideBottomPanel()
+    {
+        if (_isBottomPanelVisible)
+        {
+            System.Diagnostics.Debug.WriteLine("[HideBottomPanel] Hiding panel");
+            _isBottomPanelVisible = false;
+            AnimateOpacity(BottomPanel, BottomPanel.Opacity, 0, 300, () =>
+            {
+                BottomPanel.IsHitTestVisible = false;
+            });
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine("[HideBottomPanel] Already hidden, skipping");
+        }
+    }
+
+    #endregion
+
+    private void AnimateOpacity(UIElement element, double from, double to, int durationMs, Action? onCompleted = null)
+    {
+        var animation = new DoubleAnimation
+        {
+            From = from,
+            To = to,
+            Duration = TimeSpan.FromMilliseconds(durationMs),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+
+        if (onCompleted != null)
+        {
+            animation.Completed += (s, e) => onCompleted();
+        }
+
+        element.BeginAnimation(OpacityProperty, animation);
     }
 
     private async void VideoArea_Drop(object sender, DragEventArgs e)
@@ -102,12 +309,10 @@ public partial class MainWindow : Window
 
     private void SegmentListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        // 取消重命名计时器
         CancelRenameTimer();
 
         if (SegmentListView.SelectedItem is LoopSegmentViewModel segmentVm)
         {
-            // 确保不在编辑模式
             segmentVm.IsEditing = false;
             _viewModel.PlaySegmentCommand.Execute(segmentVm);
         }
@@ -117,7 +322,6 @@ public partial class MainWindow : Window
     {
         if (sender is FrameworkElement element && element.DataContext is LoopSegmentViewModel segmentVm)
         {
-            // 只有已选中的项目再次点击名称才会启动重命名计时器
             if (SegmentListView.SelectedItem == segmentVm && !segmentVm.IsEditing)
             {
                 _pendingRenameSegment = segmentVm;
@@ -135,7 +339,6 @@ public partial class MainWindow : Window
             _pendingRenameSegment.IsEditing = true;
             _pendingRenameSegment = null;
 
-            // 聚焦到 TextBox
             Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
             {
                 var textBox = FindVisualChild<TextBox>(SegmentListView);
@@ -172,14 +375,13 @@ public partial class MainWindow : Window
                 segmentVm.IsEditing = false;
                 _viewModel.OnSegmentRenamed();
                 e.Handled = true;
-                // 移除焦点
-                SegmentListView.Focus();
+                Focus();
             }
             else if (e.Key == Key.Escape)
             {
                 segmentVm.IsEditing = false;
                 e.Handled = true;
-                SegmentListView.Focus();
+                Focus();
             }
         }
     }
@@ -212,7 +414,11 @@ public partial class MainWindow : Window
         MessageBox.Show(
             "CornieKit Looper - Video Segment Loop Player\n\n" +
             "Version 1.0\n\n" +
-            "Press and hold R to mark video segments.\n" +
+            "Controls:\n" +
+            "• R - Hold to record segment\n" +
+            "• Space - Play/Pause\n" +
+            "• Tab - Toggle segment panel\n" +
+            "• Right-click - Menu\n\n" +
             "Created with LibVLCSharp.",
             "About",
             MessageBoxButton.OK,
@@ -224,6 +430,7 @@ public partial class MainWindow : Window
     private void SliderOverlay_MouseDown(object sender, MouseButtonEventArgs e)
     {
         _isDraggingSlider = true;
+        _hideControlsTimer?.Stop(); // 拖动时停止隐藏计时
         _viewModel.OnScrubStart();
 
         if (sender is FrameworkElement element)
@@ -242,6 +449,7 @@ public partial class MainWindow : Window
 
         _isDraggingSlider = false;
         _viewModel.OnScrubEnd();
+        ResetHideTimer(); // 拖动结束后重新开始计时
     }
 
     private void SliderOverlay_MouseMove(object sender, MouseEventArgs e)
