@@ -23,12 +23,28 @@ public partial class App : Application
         _serviceProvider = services.BuildServiceProvider();
     }
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
         var mainWindow = _serviceProvider?.GetRequiredService<MainWindow>();
         mainWindow?.Show();
+
+        // Handle command line arguments (file path from "Open with" or default program)
+        if (e.Args.Length > 0)
+        {
+            var filePath = e.Args[0];
+            if (System.IO.File.Exists(filePath))
+            {
+                var viewModel = _serviceProvider?.GetRequiredService<MainViewModel>();
+                if (viewModel != null)
+                {
+                    // Wait for window to fully load before loading video
+                    await System.Threading.Tasks.Task.Delay(200);
+                    await viewModel.LoadVideoAsync(filePath);
+                }
+            }
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
