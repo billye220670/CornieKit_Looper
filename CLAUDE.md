@@ -72,14 +72,18 @@ services.AddSingleton<MainWindow>();
 
 ### Video Playback (VideoPlayerService.cs)
 
-**LibVLC Options** (Line 37-44):
+**LibVLC Options** (Line 37-43):
 ```csharp
-"--avcodec-hw=any",        // Hardware acceleration
+"--aout=mmdevice",         // Windows Multimedia Device (uses WASAPI)
+"--audio-resampler=soxr",  // High-quality SoX Resampler
 "--file-caching=300",      // Low latency
-"--network-caching=300",
-"--clock-jitter=0",
-"--clock-synchro=0"
+"--no-audio-time-stretch"  // Disable time stretching for quality
 ```
+
+**Audio Quality Notes**:
+- `mmdevice` is the correct Windows audio output module (not `wasapi`)
+- `soxr` is the highest quality resampler, avoiding the low-quality "ugly" fallback
+- Alternative resamplers: `speex_resampler` (faster), `samplerate` (libsamplerate)
 
 **Position Monitoring** (50ms timer):
 - Fires `PositionChanged` event
@@ -240,6 +244,14 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
+- **2026-02-04**: Fixed audio quality issues by correcting LibVLC audio configuration
+  - Replaced invalid `--aout=wasapi` with proper `--aout=mmdevice`
+  - Added `--audio-resampler=soxr` to use high-quality resampler
+  - Fixes buzzing/crackling audio that sounded like "cheap recorder"
+- **2026-02-04**: Added YouTube-style UI enhancements
+  - Auto-hiding controls (3s delay when playing, hover to show)
+  - Tab key to toggle segment panel visibility
+  - Improved keyboard focus handling (Space in TextBox no longer triggers play/pause)
 - Changed recording key from Space to R
 - Removed play/delete buttons from list items
 - Added hover-to-show delete button (×)
@@ -268,6 +280,13 @@ When making changes:
 ### "Recent files not saving"
 - Files stored in `%LocalAppData%\CornieKit.Looper\recent_files.json`
 - Check `RecentFilesService.Save()` exception handling
+
+### "Audio quality is poor / buzzing / crackling"
+- Verify LibVLC options use `--aout=mmdevice` (NOT `--aout=wasapi`)
+- Ensure `--audio-resampler=soxr` is set (avoids "ugly" resampler fallback)
+- Enable verbose logging: `new LibVLC(true, options)` to check actual resampler
+- Try alternatives: `speex_resampler`, `directsound + directx-audio-float32`
+- Check video file isn't corrupted by playing in VLC desktop app
 
 ## Future Enhancement Ideas
 
@@ -304,5 +323,5 @@ If user asks to implement features, clarify:
 
 ---
 
-**Last Updated**: 2026-02-03
+**Last Updated**: 2026-02-04
 **By**: Claude Sonnet 4.5
