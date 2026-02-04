@@ -87,10 +87,21 @@ public partial class MainWindow : Window
         // Tab 键切换右侧面板
         if (e.Key == Key.Tab)
         {
-            if (Keyboard.FocusedElement is TextBox)
-                return;
+            System.Diagnostics.Debug.WriteLine($"[PreviewKeyDown] Tab pressed, Focused: {Keyboard.FocusedElement?.GetType().Name ?? "null"}");
 
+            if (Keyboard.FocusedElement is TextBox)
+            {
+                System.Diagnostics.Debug.WriteLine("[PreviewKeyDown] Tab ignored - TextBox has focus");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine("[PreviewKeyDown] Calling ToggleSidePanel");
             ToggleSidePanel();
+
+            // 清除焦点，避免显示虚线框
+            Keyboard.ClearFocus();
+            Focus();
+
             e.Handled = true;
         }
     }
@@ -176,6 +187,20 @@ public partial class MainWindow : Window
         ResetHideTimer();
     }
 
+    private void BottomHoverZone_MouseEnter(object sender, MouseEventArgs e)
+    {
+        System.Diagnostics.Debug.WriteLine("[BottomHoverZone] MouseEnter");
+        ShowBottomPanel();
+        ResetHideTimer();
+    }
+
+    private void BottomHoverZone_MouseMove(object sender, MouseEventArgs e)
+    {
+        System.Diagnostics.Debug.WriteLine($"[BottomHoverZone] MouseMove - BottomVisible: {_isBottomPanelVisible}");
+        ShowBottomPanel();
+        ResetHideTimer();
+    }
+
     private void BottomPanel_MouseEnter(object sender, MouseEventArgs e)
     {
         // 鼠标在控制栏上 → 停止隐藏计时，保持显示
@@ -241,10 +266,8 @@ public partial class MainWindow : Window
         {
             System.Diagnostics.Debug.WriteLine("[HideBottomPanel] Hiding panel");
             _isBottomPanelVisible = false;
-            AnimateOpacity(BottomPanel, BottomPanel.Opacity, 0, 300, () =>
-            {
-                BottomPanel.IsHitTestVisible = false;
-            });
+            BottomPanel.IsHitTestVisible = false;  // 立即禁用鼠标事件，让下层的 BottomHoverZone 能接收事件
+            AnimateOpacity(BottomPanel, BottomPanel.Opacity, 0, 300);
         }
         else
         {
@@ -305,6 +328,24 @@ public partial class MainWindow : Window
 
     private void VideoArea_DragLeave(object sender, DragEventArgs e)
     {
+    }
+
+    /// <summary>
+    /// 在覆盖层上的任何鼠标操作结束后，重新激活 WPF 窗口焦点。
+    /// LibVLC 的原生 HWND 会抢夺 Win32 焦点，导致键盘事件无法到达 WPF。
+    /// </summary>
+    private void VideoOverlayGrid_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        // 延迟执行以确保其他鼠标事件处理完成
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            // 如果没有 TextBox 在编辑中，重新激活窗口
+            if (Keyboard.FocusedElement is not TextBox)
+            {
+                Activate();
+                Focus();
+            }
+        });
     }
 
     private void SegmentListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)

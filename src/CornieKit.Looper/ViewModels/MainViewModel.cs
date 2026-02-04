@@ -277,6 +277,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SaveMetadataAsync().ConfigureAwait(false);
     }
 
+    [RelayCommand]
+    private void CycleLoopMode()
+    {
+        // 循环切换：Single → SequentialLoop → Random → Single
+        SelectedLoopMode = SelectedLoopMode switch
+        {
+            LoopMode.Single => LoopMode.SequentialLoop,
+            LoopMode.SequentialLoop => LoopMode.Random,
+            LoopMode.Random => LoopMode.Single,
+            _ => LoopMode.Single
+        };
+    }
+
     partial void OnPlaybackPositionChanged(double value)
     {
         if (_updatingFromVideo)

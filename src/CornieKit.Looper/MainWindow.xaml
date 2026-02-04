@@ -5,6 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:CornieKit.Looper"
         xmlns:models="clr-namespace:CornieKit.Looper.Models"
+        xmlns:converters="clr-namespace:CornieKit.Looper.Converters"
         xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         mc:Ignorable="d"
         Title="CornieKit Looper"
@@ -14,12 +15,31 @@
         Drop="VideoArea_Drop"
         DragEnter="VideoArea_DragEnter"
         DragLeave="VideoArea_DragLeave"
+        PreviewMouseMove="MainWindow_MouseMove"
         Background="Black"
-        WindowStyle="SingleBorderWindow">
+        WindowStyle="SingleBorderWindow"
+        KeyboardNavigation.TabNavigation="None">
 
     <Window.Resources>
+        <converters:LoopModeToIconConverter x:Key="LoopModeToIconConverter"/>
+
+        <!-- 全局禁用焦点虚线框 -->
+        <Style TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        </Style>
+        <Style TargetType="ListView">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        </Style>
+        <Style TargetType="ListViewItem">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        </Style>
+
         <!-- 悬浮面板按钮样式 -->
         <Style x:Key="OverlayButton" TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -49,19 +69,18 @@
 
         <!-- 删除按钮样式 -->
         <Style x:Key="DeleteButton" TargetType="Button">
-            <Setter Property="Background" Value="#44FFFFFF"/>
-            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#888888"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Width" Value="22"/>
-            <Setter Property="Height" Value="22"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="11">
+                        <Border Background="{TemplateBinding Background}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
@@ -69,13 +88,14 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#88FF6666"/>
+                    <Setter Property="Foreground" Value="#FF6666"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
 
         <!-- 片段列表项样式 -->
         <Style x:Key="SegmentListItem" TargetType="ListViewItem">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
             <Setter Property="Padding" Value="12,10"/>
             <Setter Property="Margin" Value="0"/>
@@ -108,6 +128,55 @@
             </Style.Triggers>
         </Style>
 
+        <!-- 进度条滑块（Thumb）样式 -->
+        <Style x:Key="SliderThumb" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Ellipse Width="14" Height="14"
+                                 Fill="White"
+                                 Stroke="White"
+                                 StrokeThickness="1"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 进度条样式 -->
+        <Style x:Key="VideoProgressSlider" TargetType="Slider">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid>
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="4" Background="#99FFFFFF" CornerRadius="2"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="4" Background="#33FFFFFF" CornerRadius="2"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource SliderThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Window.Resources>
 
     <Window.ContextMenu>
@@ -135,14 +204,40 @@
     </Window.ContextMenu>
 
     <Grid x:Name="RootGrid"
-          Background="Transparent">
+          Background="Black"
+          PreviewMouseMove="MainWindow_MouseMove"
+          KeyboardNavigation.TabNavigation="None"
+          KeyboardNavigation.DirectionalNavigation="None">
 
         <!-- VideoView 作为容器，所有 overlay 放在里面 -->
         <vlc:VideoView x:Name="VideoView"
-                       MediaPlayer="{Binding MediaPlayer}">
-            <Grid Background="Transparent"
+                       Background="Black"
+                       MediaPlayer="{Binding MediaPlayer}"
+                       Focusable="False"
+                       KeyboardNavigation.TabNavigation="None"
+                       KeyboardNavigation.DirectionalNavigation="None">
+            <!--
+                Overlay Grid 背景说明：
+                - 没有视频时使用纯黑色 (#FF000000)，避免 LibVLC hwnd 白色背景在 resize 时闪现
+                - 有视频时使用几乎透明 (#01000000)，让视频可见且能接收鼠标事件
+                通过 InverseEmptyStringToVisibilityConverter 控制背景切换
+            -->
+            <Grid x:Name="VideoOverlayGrid"
+                  AllowDrop="True"
+                  Drop="VideoArea_Drop"
+                  DragEnter="VideoArea_DragEnter"
+                  DragLeave="VideoArea_DragLeave"
                   MouseMove="VideoOverlay_MouseMove"
-                  MouseLeave="VideoOverlay_MouseLeave">
+                  MouseLeave="VideoOverlay_MouseLeave"
+                  PreviewMouseLeftButtonUp="VideoOverlayGrid_PreviewMouseLeftButtonUp">
+
+                <!-- 背景层：没有视频时黑色遮盖 hwnd，有视频时近透明 -->
+                <!-- 黑色背景：无视频时显示 -->
+                <Border Background="Black"
+                        Visibility="{Binding CurrentVideoPath, Converter={StaticResource EmptyStringToVisibilityConverter}}"/>
+                <!-- 近透明背景：有视频时显示，#01000000 确保能接收鼠标事件 -->
+                <Border Background="#01000000"
+                        Visibility="{Binding CurrentVideoPath, Converter={StaticResource InverseEmptyStringToVisibilityConverter}}"/>
 
                 <!-- 无视频时的提示 -->
                 <TextBlock Text="Right-click to open video, or drag and drop"
@@ -169,12 +264,25 @@
                     </StackPanel>
                 </Border>
 
+                <!-- 底部悬浮触发区域（使用 #01000000 确保能在 hwnd 上方接收鼠标事件） -->
+                <Border x:Name="BottomHoverZone"
+                        VerticalAlignment="Bottom"
+                        Height="120"
+                        Background="#01000000"
+                        Visibility="{Binding CurrentVideoPath, Converter={StaticResource InverseEmptyStringToVisibilityConverter}}"
+                        MouseEnter="BottomHoverZone_MouseEnter"
+                        MouseMove="BottomHoverZone_MouseMove"/>
+
                 <!-- 底部控制面板 (悬浮) -->
                 <Border x:Name="BottomPanel"
                         VerticalAlignment="Bottom"
                         Opacity="0"
+                        Visibility="{Binding CurrentVideoPath, Converter={StaticResource InverseEmptyStringToVisibilityConverter}}"
                         MouseEnter="BottomPanel_MouseEnter"
-                        MouseLeave="BottomPanel_MouseLeave">
+                        MouseLeave="BottomPanel_MouseLeave"
+                        KeyboardNavigation.TabNavigation="None"
+                        KeyboardNavigation.DirectionalNavigation="None"
+                        Focusable="False">
                     <Border.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                             <GradientStop Color="#00000000" Offset="0"/>
@@ -194,6 +302,7 @@
                                     Minimum="0"
                                     Maximum="100"
                                     Height="20"
+                                    Style="{StaticResource VideoProgressSlider}"
                                     VerticalAlignment="Center"
                                     IsHitTestVisible="False"/>
                             <Border Background="Transparent"
@@ -215,18 +324,20 @@
                                 <Button Style="{StaticResource OverlayButton}"
                                         Command="{Binding TogglePlayPauseCommand}">
                                     <Button.Content>
-                                        <TextBlock FontSize="20">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Text" Value="▶"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                                            <Setter Property="Text" Value="⏸"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                        <Grid Width="24" Height="24">
+                                            <Rectangle Width="24" Height="24" Fill="White"
+                                                       Visibility="{Binding IsPlaying, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                                                <Rectangle.OpacityMask>
+                                                    <ImageBrush ImageSource="/Assets/Icons/play.png"/>
+                                                </Rectangle.OpacityMask>
+                                            </Rectangle>
+                                            <Rectangle Width="24" Height="24" Fill="White"
+                                                       Visibility="{Binding IsPlaying, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                <Rectangle.OpacityMask>
+                                                    <ImageBrush ImageSource="/Assets/Icons/pause.png"/>
+                                                </Rectangle.OpacityMask>
+                                            </Rectangle>
+                                        </Grid>
                                     </Button.Content>
                                 </Button>
 
@@ -269,7 +380,10 @@
                         HorizontalAlignment="Right"
                         VerticalAlignment="Stretch"
                         Width="320"
-                        Visibility="Collapsed">
+                        Visibility="Collapsed"
+                        KeyboardNavigation.TabNavigation="None"
+                        KeyboardNavigation.DirectionalNavigation="None"
+                        Focusable="False">
                     <Border.Background>
                         <SolidColorBrush Color="#000000" Opacity="0.85"/>
                     </Border.Background>
@@ -277,17 +391,33 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- 标题栏 -->
-                        <Border Grid.Row="0" Padding="16,14" BorderBrush="#33FFFFFF" BorderThickness="0,0,0,1">
+                        <!-- 标题栏：播放按钮 + 循环模式按钮 -->
+                        <Border Grid.Row="0" Padding="12,10" BorderBrush="#33FFFFFF" BorderThickness="0,0,0,1">
                             <Grid>
-                                <TextBlock Text="Loop Segments"
-                                           Foreground="White"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
-                                           VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <!-- 播放全部按钮 -->
+                                    <Button Style="{StaticResource OverlayButton}"
+                                            Command="{Binding PlayAllSegmentsCommand}"
+                                            ToolTip="Play all segments"
+                                            Width="36" Height="36">
+                                        <Rectangle Width="20" Height="20" Fill="White">
+                                            <Rectangle.OpacityMask>
+                                                <ImageBrush ImageSource="/Assets/Icons/play.png"/>
+                                            </Rectangle.OpacityMask>
+                                        </Rectangle>
+                                    </Button>
+                                    <!-- 循环模式按钮 -->
+                                    <Button Style="{StaticResource OverlayButton}"
+                                            Command="{Binding CycleLoopModeCommand}"
+                                            ToolTip="Cycle loop mode"
+                                            Width="36" Height="36"
+                                            Margin="4,0,0,0">
+                                        <Rectangle Width="20" Height="20" Fill="White"
+                                                   OpacityMask="{Binding SelectedLoopMode, Converter={StaticResource LoopModeToIconConverter}}"/>
+                                    </Button>
+                                </StackPanel>
                                 <TextBlock Text="Tab to hide"
                                            Foreground="#666666"
                                            FontSize="11"
@@ -356,63 +486,6 @@
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
-
-                        <!-- 底部控制 -->
-                        <Border Grid.Row="2" Padding="16,12" BorderBrush="#33FFFFFF" BorderThickness="0,1,0,0">
-                            <StackPanel>
-                                <Button Content="▶ Play All Segments"
-                                        Command="{Binding PlayAllSegmentsCommand}"
-                                        HorizontalAlignment="Stretch"
-                                        Height="36"
-                                        Margin="0,0,0,12"
-                                        Background="#2196F3"
-                                        Foreground="White"
-                                        BorderThickness="0"
-                                        Cursor="Hand">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
-                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            </Border>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Style.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter Property="Background" Value="#1976D2"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
-
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="Loop Mode"
-                                               Foreground="#888888"
-                                               FontSize="12"
-                                               VerticalAlignment="Center"
-                                               Margin="0,0,12,0"/>
-                                    <ComboBox Grid.Column="1"
-                                              SelectedValue="{Binding SelectedLoopMode}"
-                                              SelectedValuePath="Tag"
-                                              FontSize="12"
-                                              Background="#222222"
-                                              Foreground="White"
-                                              BorderThickness="0">
-                                        <ComboBoxItem Content="Single (Loop current)" Tag="{x:Static models:LoopMode.Single}"/>
-                                        <ComboBoxItem Content="Sequential" Tag="{x:Static models:LoopMode.Sequential}"/>
-                                        <ComboBoxItem Content="Random" Tag="{x:Static models:LoopMode.Random}"/>
-                                        <ComboBoxItem Content="Sequential Loop" Tag="{x:Static models:LoopMode.SequentialLoop}"/>
-                                    </ComboBox>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
                     </Grid>
                 </Border>
             </Grid>

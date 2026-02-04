@@ -7,6 +7,7 @@
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
         <converters:EmptyStringToVisibilityConverter x:Key="EmptyStringToVisibilityConverter"/>
+        <converters:InverseEmptyStringToVisibilityConverter x:Key="InverseEmptyStringToVisibilityConverter"/>
         <converters:RecordingBorderConverter x:Key="RecordingBorderConverter"/>
     </Application.Resources>
 </Application>
