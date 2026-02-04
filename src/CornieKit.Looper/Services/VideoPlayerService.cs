@@ -38,8 +38,11 @@ public class VideoPlayerService : IDisposable
         {
             "--aout=mmdevice",
             "--audio-resampler=speex_resampler",
-            "--file-caching=300",
-            "--no-audio-time-stretch"
+            "--file-caching=3000",        // 增加到3秒缓存，改善大文件播放
+            "--disk-caching=3000",        // 磁盘缓存3秒
+            "--network-caching=3000",     // 网络缓存3秒（本地文件也有效）
+            "--no-audio-time-stretch",
+            "--avcodec-threads=4"         // 多线程解码，提升性能
         };
 
         _libVLC = new LibVLC(options);
