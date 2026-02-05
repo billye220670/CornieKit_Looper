@@ -26,7 +26,7 @@ A Windows video player for marking and looping video segments. Perfect for pract
 ## Installation
 
 ### Option 1: Download Release (Recommended)
-1. Download the latest `CornieKit_Looper_v1.0.2_win-x64.zip` from [Releases](https://github.com/billye220670/CornieKit_Looper/releases/latest)
+1. Download the latest `CornieKit_Looper_v1.0.3_win-x64.zip` from [Releases](https://github.com/billye220670/CornieKit_Looper/releases/latest)
 2. Extract to any folder
 3. Run `CornieKit.Looper.exe`
 4. (Optional) Run `RegisterFileAssociation.ps1` as Administrator to associate video files
