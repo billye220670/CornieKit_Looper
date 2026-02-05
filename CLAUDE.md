@@ -246,6 +246,16 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
+- **2026-02-05**: Added keyboard arrow key navigation shortcuts
+  - **Left/Right Arrow**: Seek backward/forward 5 seconds with boundary checks
+  - **Up/Down Arrow**: Cycle through segments and auto-play (like double-click)
+  - Added `SeekRelative(int seconds)` in MainViewModel for time navigation
+  - Added `SelectedSegment` property with ListView binding for keyboard selection
+  - Updated About dialog with new keyboard shortcuts
+  - **Implementation notes**:
+    - Arrow keys respect TextBox focus (no interference with rename mode)
+    - Up/Down selection automatically triggers `PlaySegmentCommand` for seamless navigation
+    - Seeking uses `Position` property to avoid LibVLC pause-state issues
 - **2026-02-05 (v1.0.3)**: Fixed persistent audio quality issues with comprehensive solution
   - **Root cause**: Previous `mmdevice + soxr` config was unreliable; soxr might not load correctly
   - **Solution**: Switched to `--aout=directsound` with `--directx-audio-float32`

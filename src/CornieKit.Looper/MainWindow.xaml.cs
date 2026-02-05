@@ -90,6 +90,12 @@ public partial class MainWindow : Window
         ShowBottomPanel();
         ResetHideTimer();
 
+        // 如果焦点在TextBox上（重命名模式），不处理快捷键
+        if (Keyboard.FocusedElement is TextBox)
+        {
+            return;
+        }
+
         if (e.Key == Key.R && !e.IsRepeat)
         {
             _viewModel.OnRecordKeyDown();
@@ -97,13 +103,31 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Space && !e.IsRepeat)
         {
-            // 如果焦点在TextBox上，不处理空格键
-            if (Keyboard.FocusedElement is TextBox)
-            {
-                return;
-            }
-
             _viewModel.TogglePlayPauseCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Left && !e.IsRepeat)
+        {
+            // 左方向键：后退 5 秒
+            _viewModel.SeekRelative(-5);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Right && !e.IsRepeat)
+        {
+            // 右方向键：快进 5 秒
+            _viewModel.SeekRelative(5);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Up && !e.IsRepeat)
+        {
+            // 上方向键：选择上一个 segment（循环）
+            _viewModel.SelectPreviousSegment();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down && !e.IsRepeat)
+        {
+            // 下方向键：选择下一个 segment（循环）
+            _viewModel.SelectNextSegment();
             e.Handled = true;
         }
     }
@@ -476,6 +500,8 @@ public partial class MainWindow : Window
             "• R - Hold to record segment\n" +
             "• Space - Play/Pause\n" +
             "• Tab - Toggle segment panel\n" +
+            "• Left/Right Arrow - Seek backward/forward 5 seconds\n" +
+            "• Up/Down Arrow - Select previous/next segment (cycle)\n" +
             "• Right-click - Menu\n\n" +
             "Created with LibVLCSharp.",
             "About",

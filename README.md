@@ -57,6 +57,11 @@ dotnet build -c Release
 |-----|--------|
 | `R` (hold) | Record segment (while playing) |
 | `Space` | Play / Pause |
+| `Tab` | Toggle segment panel |
+| `Left Arrow` | Rewind 5 seconds |
+| `Right Arrow` | Fast forward 5 seconds |
+| `Up Arrow` | Play previous segment (cycle) |
+| `Down Arrow` | Play next segment (cycle) |
 
 ## Tech Stack
 

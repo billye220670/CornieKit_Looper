@@ -486,6 +486,7 @@
                         <ListView Grid.Row="1"
                                   x:Name="SegmentListView"
                                   ItemsSource="{Binding Segments}"
+                                  SelectedItem="{Binding SelectedSegment, Mode=TwoWay}"
                                   ItemContainerStyle="{StaticResource SegmentListItem}"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   BorderThickness="0"

@@ -61,6 +61,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _hasRecentFiles;
 
+    [ObservableProperty]
+    private LoopSegmentViewModel? _selectedSegment;
+
     public MainViewModel(
         VideoPlayerService videoPlayer,
         SegmentManager segmentManager,
@@ -320,6 +323,98 @@ public partial class MainViewModel : ObservableObject, IDisposable
             LoopMode.Random => LoopMode.Single,
             _ => LoopMode.Single
         };
+    }
+
+    /// <summary>
+    /// 相对时间跳转（快进/快退）
+    /// </summary>
+    public void SeekRelative(int seconds)
+    {
+        if (string.IsNullOrEmpty(CurrentVideoPath) || _videoPlayer.Duration.TotalSeconds == 0)
+            return;
+
+        var currentTime = _videoPlayer.CurrentTime;
+        var newTime = currentTime.Add(TimeSpan.FromSeconds(seconds));
+
+        // 边界检查
+        if (newTime < TimeSpan.Zero)
+            newTime = TimeSpan.Zero;
+        else if (newTime > _videoPlayer.Duration)
+            newTime = _videoPlayer.Duration;
+
+        // 使用 Position 进行 seek
+        var position = (float)(newTime.TotalSeconds / _videoPlayer.Duration.TotalSeconds);
+        _videoPlayer.SeekByPosition(position);
+    }
+
+    /// <summary>
+    /// 选择上一个 segment（循环），并自动播放
+    /// </summary>
+    public void SelectPreviousSegment()
+    {
+        if (Segments.Count == 0)
+            return;
+
+        int currentIndex;
+
+        if (SelectedSegment == null)
+        {
+            // 如果没有选中项，选择最后一个
+            currentIndex = Segments.Count;
+        }
+        else
+        {
+            currentIndex = Segments.IndexOf(SelectedSegment);
+            if (currentIndex == -1)
+            {
+                currentIndex = Segments.Count;
+            }
+        }
+
+        // 循环到上一个（到顶部时循环到底部）
+        var previousIndex = (currentIndex - 1 + Segments.Count) % Segments.Count;
+        SelectedSegment = Segments[previousIndex];
+
+        // 自动播放选中的 segment（相当于双击）
+        if (SelectedSegment != null)
+        {
+            PlaySegmentCommand.Execute(SelectedSegment);
+        }
+    }
+
+    /// <summary>
+    /// 选择下一个 segment（循环），并自动播放
+    /// </summary>
+    public void SelectNextSegment()
+    {
+        if (Segments.Count == 0)
+            return;
+
+        int currentIndex;
+
+        if (SelectedSegment == null)
+        {
+            // 如果没有选中项，选择第一个
+            currentIndex = -1;
+        }
+        else
+        {
+            currentIndex = Segments.IndexOf(SelectedSegment);
+            if (currentIndex == -1)
+            {
+                currentIndex = -1;
+            }
+        }
+
+        // 循环到下一个（到底部时循环到顶部）
+        var nextIndex = (currentIndex + 1) % Segments.Count;
+        SelectedSegment = Segments[nextIndex];
+
+        // 自动播放选中的 segment（相当于双击）
+        if (SelectedSegment != null)
+        {
+            PlaySegmentCommand.Execute(SelectedSegment);
+        }
     }
 
     partial void OnPlaybackPositionChanged(double value)
