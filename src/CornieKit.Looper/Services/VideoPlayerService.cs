@@ -26,6 +26,7 @@ public class VideoPlayerService : IDisposable
     public event EventHandler? PlaybackStopped;
     public event EventHandler<TimeSpan>? PositionChanged;
     public event EventHandler? SegmentLoopCompleted;
+    public event EventHandler? PlaybackEnded;
 
     public void Initialize()
     {
@@ -36,13 +37,10 @@ public class VideoPlayerService : IDisposable
 
         var options = new[]
         {
-            "--aout=mmdevice",
-            "--audio-resampler=speex_resampler",
-            "--file-caching=3000",        // 增加到3秒缓存，改善大文件播放
-            "--disk-caching=3000",        // 磁盘缓存3秒
-            "--network-caching=3000",     // 网络缓存3秒（本地文件也有效）
-            "--no-audio-time-stretch",
-            "--avcodec-threads=4"         // 多线程解码，提升性能
+            "--aout=directsound",
+            "--directx-audio-float32",
+            "--file-caching=300",
+            "--no-audio-time-stretch"
         };
 
         _libVLC = new LibVLC(options);
@@ -51,10 +49,11 @@ public class VideoPlayerService : IDisposable
         _mediaPlayer.Playing += (s, e) => PlaybackStarted?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.Paused += (s, e) => PlaybackPaused?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.Stopped += (s, e) => PlaybackStopped?.Invoke(this, EventArgs.Empty);
+        _mediaPlayer.EndReached += OnEndReached;
 
         _positionTimer = new System.Timers.Timer(50);
         _positionTimer.Elapsed += OnPositionTimerElapsed;
-        _positionTimer.Start();
+        // Don't start timer here - it will start when video plays
     }
 
     public async Task<bool> LoadVideoAsync(string filePath)
@@ -68,12 +67,15 @@ public class VideoPlayerService : IDisposable
             _currentMedia = new Media(_libVLC, filePath, FromType.FromPath);
             _mediaPlayer.Media = _currentMedia;
 
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
                 _mediaPlayer.Play();
+                var timeout = DateTime.Now.AddSeconds(10);
                 while (_mediaPlayer.Length == 0)
                 {
-                    Task.Delay(10).Wait();
+                    if (DateTime.Now > timeout)
+                        throw new TimeoutException("Video metadata loading timeout");
+                    await Task.Delay(10);
                 }
                 _mediaPlayer.Pause();
             });
@@ -90,16 +92,19 @@ public class VideoPlayerService : IDisposable
     public void Play()
     {
         _mediaPlayer?.Play();
+        _positionTimer?.Start();
     }
 
     public void Pause()
     {
         _mediaPlayer?.Pause();
+        _positionTimer?.Stop();
     }
 
     public void Stop()
     {
         _mediaPlayer?.Stop();
+        _positionTimer?.Stop();
         _activeLoopSegment = null;
     }
 
@@ -115,7 +120,8 @@ public class VideoPlayerService : IDisposable
     {
         if (_mediaPlayer != null && _mediaPlayer.Length > 0)
         {
-            _mediaPlayer.Time = (long)time.TotalMilliseconds;
+            var clampedTime = Math.Clamp((long)time.TotalMilliseconds, 0, _mediaPlayer.Length);
+            _mediaPlayer.Time = clampedTime;
         }
     }
 
@@ -160,6 +166,33 @@ public class VideoPlayerService : IDisposable
             Seek(_activeLoopSegment.StartTime);
             SegmentLoopCompleted?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private void OnEndReached(object? sender, EventArgs e)
+    {
+        _positionTimer?.Stop();
+
+        // IMPORTANT: LibVLC EndReached callback runs on internal thread
+        // Calling Play/Stop/Seek directly here causes deadlock
+        // Must use ThreadPool to avoid blocking LibVLC's thread
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            _mediaPlayer?.Stop();
+            Thread.Sleep(50); // Give LibVLC time to release resources
+
+            // If there's an active loop segment, restart from its beginning
+            if (_activeLoopSegment != null)
+            {
+                Seek(_activeLoopSegment.StartTime);
+            }
+            else
+            {
+                // No segment - just restart from the beginning
+                SeekByPosition(0);
+            }
+
+            Play();
+        });
     }
 
     public void Dispose()

@@ -53,6 +53,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private DateTime _lastSeekTime;
     private const int SeekThrottleMs = 50;
     private bool _playingSingleSegment;
+    private CancellationTokenSource? _loadCancellationToken;
 
     public ObservableCollection<LoopSegmentViewModel> Segments { get; } = new();
     public ObservableCollection<RecentFileItem> RecentFiles { get; } = new();
@@ -79,6 +80,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _videoPlayer.PlaybackPaused += (s, e) => IsPlaying = false;
         _videoPlayer.PlaybackStopped += (s, e) => IsPlaying = false;
         _videoPlayer.SegmentLoopCompleted += OnSegmentLoopCompleted;
+        _videoPlayer.PlaybackEnded += OnPlaybackEnded;
 
         _segmentManager.SegmentsChanged += OnSegmentsChanged;
         _segmentManager.CurrentSegmentChanged += OnCurrentSegmentChanged;
@@ -104,37 +106,66 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task LoadVideoAsync(string filePath)
     {
+        // Cancel any previous loading operation
+        _loadCancellationToken?.Cancel();
+        _loadCancellationToken = new CancellationTokenSource();
+        var token = _loadCancellationToken.Token;
+
         StatusMessage = "Loading video...";
 
-        var success = await _videoPlayer.LoadVideoAsync(filePath);
-        if (!success)
+        try
+        {
+            var success = await _videoPlayer.LoadVideoAsync(filePath);
+
+            // Check if cancelled before proceeding
+            token.ThrowIfCancellationRequested();
+
+            if (!success)
+            {
+                StatusMessage = "Failed to load video";
+                MessageBox.Show("Failed to load video file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            CurrentVideoPath = filePath;
+            DurationText = TimeFormatHelper.FormatTime(_videoPlayer.Duration);
+
+            // Reset playback state for new video
+            _playingSingleSegment = false;
+            PlaybackPosition = 0;
+
+            // 添加到最近文件
+            _recentFiles.AddRecentFile(filePath);
+
+            var metadata = await _dataPersistence.LoadMetadataAsync(filePath);
+
+            // Check if cancelled after async operation
+            token.ThrowIfCancellationRequested();
+
+            if (metadata != null)
+            {
+                _segmentManager.LoadSegments(metadata.Segments);
+                SelectedLoopMode = metadata.DefaultLoopMode;
+                StatusMessage = $"Loaded {metadata.Segments.Count} segments";
+            }
+            else
+            {
+                _segmentManager.Clear();
+                StatusMessage = "Video loaded. Press R to mark segments.";
+            }
+
+            // 自动开始播放
+            _videoPlayer.Play();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Video loading cancelled";
+        }
+        catch (Exception ex)
         {
             StatusMessage = "Failed to load video";
-            MessageBox.Show("Failed to load video file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
+            MessageBox.Show($"Failed to load video: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
-
-        CurrentVideoPath = filePath;
-        DurationText = TimeFormatHelper.FormatTime(_videoPlayer.Duration);
-
-        // 添加到最近文件
-        _recentFiles.AddRecentFile(filePath);
-
-        var metadata = await _dataPersistence.LoadMetadataAsync(filePath);
-        if (metadata != null)
-        {
-            _segmentManager.LoadSegments(metadata.Segments);
-            SelectedLoopMode = metadata.DefaultLoopMode;
-            StatusMessage = $"Loaded {metadata.Segments.Count} segments";
-        }
-        else
-        {
-            _segmentManager.Clear();
-            StatusMessage = "Video loaded. Press R to mark segments.";
-        }
-
-        // 自动开始播放
-        _videoPlayer.Play();
     }
 
     private void RefreshRecentFiles()
@@ -187,6 +218,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _videoPlayer.Stop();
         PlaybackPosition = 0;
+        _playingSingleSegment = false;
     }
 
     public void OnRecordKeyDown()
@@ -379,6 +411,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void OnPlaybackEnded(object? sender, EventArgs e)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            _updatingFromVideo = true;
+            PlaybackPosition = 0;
+            CurrentTimeText = "00:00";
+            _updatingFromVideo = false;
+            IsPlaying = false;
+            _playingSingleSegment = false;
+            StatusMessage = "Playback ended";
+        });
+    }
+
     private void OnSegmentsChanged(object? sender, EventArgs e)
     {
         Application.Current.Dispatcher.Invoke(() =>
@@ -436,6 +482,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        try
+        {
+            _loadCancellationToken?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // CancellationTokenSource already disposed, ignore
+        }
+
+        _loadCancellationToken?.Dispose();
         _videoPlayer?.Dispose();
     }
 }
