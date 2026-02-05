@@ -4,7 +4,7 @@
 
 **CornieKit Looper** is a Windows desktop video player built with .NET 8.0 WPF that enables users to mark and loop specific segments of videos. Primary use cases include music practice, dance learning, and video review.
 
-**Version**: 1.0.0
+**Version**: 1.0.3
 **Repository**: https://github.com/billye220670/CornieKit_Looper
 **Language**: C# (.NET 8.0)
 **Platform**: Windows 10/11
@@ -72,18 +72,20 @@ services.AddSingleton<MainWindow>();
 
 ### Video Playback (VideoPlayerService.cs)
 
-**LibVLC Options** (Line 37-43):
+**LibVLC Options** (Line 38-43):
 ```csharp
-"--aout=mmdevice",         // Windows Multimedia Device (uses WASAPI)
-"--audio-resampler=soxr",  // High-quality SoX Resampler
-"--file-caching=300",      // Low latency
-"--no-audio-time-stretch"  // Disable time stretching for quality
+"--aout=directsound",         // DirectSound audio output
+"--directx-audio-float32",    // Force 32-bit float audio (high quality)
+"--file-caching=300",         // Low latency (300ms)
+"--no-audio-time-stretch"     // Disable time stretching for quality
 ```
 
-**Audio Quality Notes**:
-- `mmdevice` is the correct Windows audio output module (not `wasapi`)
-- `soxr` is the highest quality resampler, avoiding the low-quality "ugly" fallback
-- Alternative resamplers: `speex_resampler` (faster), `samplerate` (libsamplerate)
+**Audio Quality Notes** (v1.0.3):
+- `directsound` is more stable than `mmdevice` for Windows audio output
+- `--directx-audio-float32` forces 32-bit floating point audio, preventing low-bitrate sound
+- Previous `soxr` resampler approach was unreliable (LibVLC might not load it correctly)
+- Letting DirectSound handle audio conversion is more consistent
+- If audio quality issues occur, verify same video sounds good in VLC desktop player
 
 **Position Monitoring** (50ms timer):
 - Fires `PositionChanged` event
@@ -194,7 +196,7 @@ dotnet build
 dotnet publish -c Release -r win-x64 --self-contained false -o publish
 
 # Zip for release
-powershell Compress-Archive -Path 'publish\*' -DestinationPath 'CornieKit_Looper_v1.0.0_win-x64.zip'
+powershell Compress-Archive -Path 'publish\*' -DestinationPath 'CornieKit_Looper_v1.0.3_win-x64.zip'
 ```
 
 ### Version Bumping
@@ -244,10 +246,21 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
+- **2026-02-05 (v1.0.3)**: Fixed persistent audio quality issues with comprehensive solution
+  - **Root cause**: Previous `mmdevice + soxr` config was unreliable; soxr might not load correctly
+  - **Solution**: Switched to `--aout=directsound` with `--directx-audio-float32`
+  - DirectSound is more stable and 32-bit float prevents low-bitrate sound
+  - Reduced audio caching from 3000ms to 300ms for better responsiveness
+  - Added 10-second timeout for video loading to prevent hangs
+  - Implemented cancellation support for video loading operations
+  - Fixed timer lifecycle in Play/Pause operations
+  - Enhanced EndReached event handling for seamless looping
+  - **Key learning**: Don't rely on external resamplers; use native audio API with high-quality output format
 - **2026-02-04**: Fixed audio quality issues by correcting LibVLC audio configuration
   - Replaced invalid `--aout=wasapi` with proper `--aout=mmdevice`
   - Added `--audio-resampler=soxr` to use high-quality resampler
   - Fixes buzzing/crackling audio that sounded like "cheap recorder"
+  - **Note**: This fix was incomplete; v1.0.3 provides the final solution
 - **2026-02-04**: Added YouTube-style UI enhancements
   - Auto-hiding controls (3s delay when playing, hover to show)
   - Tab key to toggle segment panel visibility
@@ -281,12 +294,14 @@ When making changes:
 - Files stored in `%LocalAppData%\CornieKit.Looper\recent_files.json`
 - Check `RecentFilesService.Save()` exception handling
 
-### "Audio quality is poor / buzzing / crackling"
-- Verify LibVLC options use `--aout=mmdevice` (NOT `--aout=wasapi`)
-- Ensure `--audio-resampler=soxr` is set (avoids "ugly" resampler fallback)
-- Enable verbose logging: `new LibVLC(true, options)` to check actual resampler
-- Try alternatives: `speex_resampler`, `directsound + directx-audio-float32`
-- Check video file isn't corrupted by playing in VLC desktop app
+### "Audio quality is poor / buzzing / crackling / sounds low-bitrate"
+- **v1.0.3 Solution**: Use `--aout=directsound` with `--directx-audio-float32`
+- Verify LibVLC options in VideoPlayerService.cs line 38-43
+- Compare audio with VLC desktop player to confirm it's a config issue
+- **Don't** use `--audio-resampler=soxr` - it may not load reliably
+- **Don't** use `mmdevice` - DirectSound is more consistent
+- Enable verbose logging: `new LibVLC(true, options)` to diagnose actual audio path
+- Check that video file itself isn't corrupted or low-quality source
 
 ## Future Enhancement Ideas
 
@@ -323,5 +338,5 @@ If user asks to implement features, clarify:
 
 ---
 
-**Last Updated**: 2026-02-04
+**Last Updated**: 2026-02-05
 **By**: Claude Sonnet 4.5
