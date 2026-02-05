@@ -15,6 +15,8 @@ A Windows video player for marking and looping video segments. Perfect for pract
   - Sequential: Play segments in order once
   - Random: Shuffle playback
   - Sequential Loop: Repeat all segments
+- **Optimized for Large Files** - Smooth playback of 4GB+ video files without audio stuttering
+- **File Association** - Set as default program to open videos by double-clicking
 - **Recent Files** - Quick access to recently opened videos
 - **Inline Rename** - Click on selected segment name to rename (Windows Explorer style)
 - **Auto-save** - Segments saved to `.cornieloop` files alongside videos
@@ -23,8 +25,13 @@ A Windows video player for marking and looping video segments. Perfect for pract
 
 ## Installation
 
-### Option 1: Download Release
-Download the latest release from [Releases](https://github.com/billye220670/CornieKit_Looper/releases).
+### Option 1: Download Release (Recommended)
+1. Download the latest `CornieKit_Looper_v1.0.2_win-x64.zip` from [Releases](https://github.com/billye220670/CornieKit_Looper/releases/latest)
+2. Extract to any folder
+3. Run `CornieKit.Looper.exe`
+4. (Optional) Run `RegisterFileAssociation.ps1` as Administrator to associate video files
+
+**System Requirements**: Windows 10/11 + [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
 
 ### Option 2: Build from Source
 Requires .NET 8.0 SDK.
