@@ -257,7 +257,8 @@
                   DragLeave="VideoArea_DragLeave"
                   MouseMove="VideoOverlay_MouseMove"
                   MouseLeave="VideoOverlay_MouseLeave"
-                  PreviewMouseLeftButtonUp="VideoOverlayGrid_PreviewMouseLeftButtonUp">
+                  PreviewMouseLeftButtonUp="VideoOverlayGrid_PreviewMouseLeftButtonUp"
+                  PreviewMouseWheel="VideoOverlayGrid_PreviewMouseWheel">
 
                 <!-- 背景层：没有视频时黑色遮盖 hwnd，有视频时近透明 -->
                 <!-- 黑色背景：无视频时显示 -->
@@ -265,7 +266,8 @@
                         Visibility="{Binding CurrentVideoPath, Converter={StaticResource EmptyStringToVisibilityConverter}}"/>
                 <!-- 近透明背景：有视频时显示，#01000000 确保能接收鼠标事件 -->
                 <Border Background="#01000000"
-                        Visibility="{Binding CurrentVideoPath, Converter={StaticResource InverseEmptyStringToVisibilityConverter}}"/>
+                        Visibility="{Binding CurrentVideoPath, Converter={StaticResource InverseEmptyStringToVisibilityConverter}}"
+                        MouseLeftButtonDown="VideoArea_MouseLeftButtonDown"/>
 
                 <!-- 无视频时的提示 -->
                 <TextBlock Text="Drop video to open"
@@ -289,6 +291,30 @@
                                    Foreground="White"
                                    FontWeight="SemiBold"
                                    FontSize="13"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 音量HUD -->
+                <Border x:Name="VolumeHUD"
+                        Background="#CC000000"
+                        Padding="20,12"
+                        CornerRadius="8"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Visibility="Collapsed"
+                        Opacity="0">
+                    <StackPanel Orientation="Vertical" HorizontalAlignment="Center">
+                        <TextBlock x:Name="VolumeIcon"
+                                   Text="🔊"
+                                   FontSize="32"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,8"/>
+                        <TextBlock x:Name="VolumeText"
+                                   Text="100%"
+                                   Foreground="White"
+                                   FontWeight="SemiBold"
+                                   FontSize="20"
+                                   HorizontalAlignment="Center"/>
                     </StackPanel>
                 </Border>
 

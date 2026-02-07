@@ -64,6 +64,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private LoopSegmentViewModel? _selectedSegment;
 
+    [ObservableProperty]
+    private int _currentVolume = 100;
+
     public MainViewModel(
         VideoPlayerService videoPlayer,
         SegmentManager segmentManager,
@@ -77,6 +80,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _videoPlayer.Initialize();
         MediaPlayer = _videoPlayer.MediaPlayer;
+
+        // 初始化音量
+        _videoPlayer.SetVolume(100);
+        CurrentVolume = 100;
 
         _videoPlayer.PositionChanged += OnPositionChanged;
         _videoPlayer.PlaybackStarted += (s, e) => IsPlaying = true;
@@ -415,6 +422,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             PlaySegmentCommand.Execute(SelectedSegment);
         }
+    }
+
+    /// <summary>
+    /// 调节音量
+    /// </summary>
+    public void AdjustVolume(int delta)
+    {
+        Console.WriteLine($"[MainViewModel] AdjustVolume called, delta={delta}, current={CurrentVolume}");
+        var newVolume = CurrentVolume + delta;
+        newVolume = Math.Clamp(newVolume, 0, 100);
+        CurrentVolume = newVolume;
+        Console.WriteLine($"[MainViewModel] Setting volume to {newVolume}");
+        _videoPlayer.SetVolume(newVolume);
+        Console.WriteLine($"[MainViewModel] Volume set complete, VideoPlayer.Volume={_videoPlayer.Volume}");
+    }
+
+    /// <summary>
+    /// 设置音量
+    /// </summary>
+    public void SetVolume(int volume)
+    {
+        Console.WriteLine($"[MainViewModel] SetVolume called, volume={volume}");
+        var newVolume = Math.Clamp(volume, 0, 100);
+        CurrentVolume = newVolume;
+        Console.WriteLine($"[MainViewModel] Setting volume to {newVolume}");
+        _videoPlayer.SetVolume(newVolume);
+        Console.WriteLine($"[MainViewModel] Volume set complete, VideoPlayer.Volume={_videoPlayer.Volume}");
     }
 
     partial void OnPlaybackPositionChanged(double value)

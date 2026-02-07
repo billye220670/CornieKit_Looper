@@ -14,6 +14,7 @@ public class VideoPlayerService : IDisposable
 
     public MediaPlayer? MediaPlayer => _mediaPlayer;
     public bool IsPlaying => _mediaPlayer?.IsPlaying ?? false;
+    public int Volume => _mediaPlayer?.Volume ?? 100;
     public TimeSpan CurrentTime => _mediaPlayer != null
         ? TimeSpan.FromMilliseconds(_mediaPlayer.Time)
         : TimeSpan.Zero;
@@ -135,9 +136,17 @@ public class VideoPlayerService : IDisposable
 
     public void SetVolume(int volume)
     {
+        var clampedVolume = Math.Clamp(volume, 0, 100);
+        Console.WriteLine($"[VideoPlayerService] SetVolume called, volume={volume}, clamped={clampedVolume}");
+
         if (_mediaPlayer != null)
         {
-            _mediaPlayer.Volume = Math.Clamp(volume, 0, 100);
+            _mediaPlayer.Volume = clampedVolume;
+            Console.WriteLine($"[VideoPlayerService] MediaPlayer.Volume set to {_mediaPlayer.Volume}");
+        }
+        else
+        {
+            Console.WriteLine("[VideoPlayerService] MediaPlayer is null!");
         }
     }
 

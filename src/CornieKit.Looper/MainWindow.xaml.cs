@@ -20,6 +20,9 @@ public partial class MainWindow : Window
     private bool _isMouseOverMenuButton;
     private bool _isMouseOverBottomPanel;
     private const int HideDelayMs = 1000; // 1秒后自动隐藏
+    private DateTime _lastWheelTime = DateTime.MinValue;
+    private const int FastScrollThresholdMs = 150; // 快速滚动阈值
+    private DispatcherTimer? _volumeHudTimer;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -47,6 +50,13 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(HideDelayMs)
         };
         _hideControlsTimer.Tick += HideControlsTimer_Tick;
+
+        // 音量HUD自动隐藏计时器
+        _volumeHudTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _volumeHudTimer.Tick += VolumeHudTimer_Tick;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -139,6 +149,153 @@ public partial class MainWindow : Window
             _viewModel.OnRecordKeyUp();
             e.Handled = true;
         }
+    }
+
+    private void VideoOverlayGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        Console.WriteLine($"[VolumeControl] VideoOverlayGrid_PreviewMouseWheel triggered, Delta={e.Delta}");
+
+        // 获取鼠标位置下的元素
+        var element = e.OriginalSource as DependencyObject;
+        Console.WriteLine($"[VolumeControl] OriginalSource: {element?.GetType().Name ?? "null"}");
+
+        // 检查是否在UI控件上（右侧面板、底部控制栏、进度条等）
+        var isOverUI = IsMouseOverUIElement(element);
+        Console.WriteLine($"[VolumeControl] IsMouseOverUIElement={isOverUI}");
+
+        if (isOverUI)
+        {
+            Console.WriteLine("[VolumeControl] Over UI element, skipping volume adjustment");
+            return; // 在UI控件上，不处理音量调节
+        }
+
+        // 检测快速向下滚动
+        var now = DateTime.Now;
+        var timeSinceLastScroll = (now - _lastWheelTime).TotalMilliseconds;
+        Console.WriteLine($"[VolumeControl] Time since last scroll: {timeSinceLastScroll}ms");
+
+        if (e.Delta < 0 && timeSinceLastScroll < FastScrollThresholdMs)
+        {
+            // 快速向下滚动 → 静音
+            Console.WriteLine("[VolumeControl] Fast scroll down detected, muting");
+            _viewModel.SetVolume(0);
+        }
+        else
+        {
+            // 普通滚动 → ±5% 调节音量
+            var delta = e.Delta > 0 ? 5 : -5;
+            Console.WriteLine($"[VolumeControl] Adjusting volume by {delta}");
+            _viewModel.AdjustVolume(delta);
+        }
+
+        _lastWheelTime = now;
+        e.Handled = true;
+
+        Console.WriteLine($"[VolumeControl] Current volume after adjustment: {_viewModel.CurrentVolume}%");
+
+        // 显示音量HUD
+        ShowVolumeHUD(_viewModel.CurrentVolume);
+    }
+
+    /// <summary>
+    /// 显示音量HUD
+    /// </summary>
+    private void ShowVolumeHUD(int volume)
+    {
+        // 更新音量文本
+        VolumeText.Text = $"{volume}%";
+
+        // 根据音量更新图标
+        if (volume == 0)
+        {
+            VolumeIcon.Text = "🔇"; // 静音
+        }
+        else if (volume < 33)
+        {
+            VolumeIcon.Text = "🔈"; // 低音量
+        }
+        else if (volume < 66)
+        {
+            VolumeIcon.Text = "🔉"; // 中音量
+        }
+        else
+        {
+            VolumeIcon.Text = "🔊"; // 高音量
+        }
+
+        // 显示HUD
+        VolumeHUD.Visibility = Visibility.Visible;
+        AnimateOpacity(VolumeHUD, VolumeHUD.Opacity, 1, 200);
+
+        // 重置隐藏计时器
+        _volumeHudTimer?.Stop();
+        _volumeHudTimer?.Start();
+    }
+
+    /// <summary>
+    /// 音量HUD自动隐藏
+    /// </summary>
+    private void VolumeHudTimer_Tick(object? sender, EventArgs e)
+    {
+        _volumeHudTimer?.Stop();
+        AnimateOpacity(VolumeHUD, 1, 0, 300, () =>
+        {
+            VolumeHUD.Visibility = Visibility.Collapsed;
+        });
+    }
+
+    /// <summary>
+    /// 检查鼠标是否在UI控件上（右侧面板、底部控制栏、进度条等）
+    /// </summary>
+    private bool IsMouseOverUIElement(DependencyObject? element)
+    {
+        if (element == null)
+        {
+            Console.WriteLine("[IsMouseOverUIElement] Element is null, returning false");
+            return false;
+        }
+
+        // 检查是否在UI控件上
+        while (element != null)
+        {
+            if (element is FrameworkElement fe)
+            {
+                Console.WriteLine($"[IsMouseOverUIElement] Checking element: {fe.GetType().Name}, Name={fe.Name}");
+
+                // 检查是否是右侧面板
+                if (fe.Name == "SidePanel" && SidePanel.Visibility == Visibility.Visible)
+                {
+                    Console.WriteLine("[IsMouseOverUIElement] Found SidePanel (visible), returning true");
+                    return true;
+                }
+
+                // 检查是否是底部控制面板
+                if (fe.Name == "BottomPanel")
+                {
+                    Console.WriteLine("[IsMouseOverUIElement] Found BottomPanel, returning true");
+                    return true;
+                }
+
+                // 检查是否是进度条
+                if (fe.Name == "ProgressSlider")
+                {
+                    Console.WriteLine("[IsMouseOverUIElement] Found ProgressSlider, returning true");
+                    return true;
+                }
+
+                // 检查是否是菜单按钮
+                if (fe.Name == "MenuButton")
+                {
+                    Console.WriteLine("[IsMouseOverUIElement] Found MenuButton, returning true");
+                    return true;
+                }
+            }
+
+            element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+        }
+
+        Console.WriteLine("[IsMouseOverUIElement] No UI element found, returning false");
+        return false;
     }
 
     private void ToggleSidePanel()
@@ -361,6 +518,22 @@ public partial class MainWindow : Window
     {
     }
 
+    private void VideoArea_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // 获取鼠标位置下的元素
+        var element = e.OriginalSource as DependencyObject;
+
+        // 检查是否点击在UI控件上（右侧面板、底部控制栏、按钮等）
+        if (IsMouseOverUIElement(element))
+        {
+            return; // 点击在UI控件上，不处理播放/暂停
+        }
+
+        // 点击在视频区域，触发播放/暂停
+        _viewModel.TogglePlayPauseCommand.Execute(null);
+        e.Handled = true;
+    }
+
     /// <summary>
     /// 在覆盖层上的任何鼠标操作结束后，重新激活 WPF 窗口焦点。
     /// LibVLC 的原生 HWND 会抢夺 Win32 焦点，导致键盘事件无法到达 WPF。
@@ -495,13 +668,15 @@ public partial class MainWindow : Window
     {
         MessageBox.Show(
             "CornieKit Looper - Video Segment Loop Player\n\n" +
-            "Version 1.1.0\n\n" +
+            "Version 1.2.0\n\n" +
             "Controls:\n" +
             "• R - Hold to record segment\n" +
             "• Space - Play/Pause\n" +
             "• Tab - Toggle segment panel\n" +
             "• Left/Right Arrow - Seek backward/forward 5 seconds\n" +
             "• Up/Down Arrow - Select previous/next segment (cycle)\n" +
+            "• Mouse Wheel - Adjust volume (±5%)\n" +
+            "• Click video - Play/Pause\n" +
             "• Right-click - Menu\n\n" +
             "Created with LibVLCSharp.",
             "About",
