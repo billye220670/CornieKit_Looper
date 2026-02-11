@@ -841,7 +841,7 @@ public partial class MainWindow : Window
     {
         MessageBox.Show(
             "CornieKit Looper - Video Segment Loop Player\n\n" +
-            "Version 1.2.0\n\n" +
+            "Version 1.3.0\n\n" +
             "Controls:\n" +
             "• R - Hold to record segment\n" +
             "• Space - Play/Pause\n" +
