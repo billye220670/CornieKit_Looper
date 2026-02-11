@@ -16,6 +16,7 @@
         DragEnter="VideoArea_DragEnter"
         DragLeave="VideoArea_DragLeave"
         PreviewMouseMove="MainWindow_MouseMove"
+        PreviewMouseLeftButtonDown="MainWindow_PreviewMouseLeftButtonDown"
         Background="Black"
         WindowStyle="SingleBorderWindow"
         KeyboardNavigation.TabNavigation="None">
@@ -297,25 +298,39 @@
                 <!-- 音量HUD -->
                 <Border x:Name="VolumeHUD"
                         Background="#CC000000"
-                        Padding="20,12"
+                        Width="220"
+                        Height="170"
+                        Padding="30,22"
                         CornerRadius="8"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         Visibility="Collapsed"
                         Opacity="0">
-                    <StackPanel Orientation="Vertical" HorizontalAlignment="Center">
-                        <TextBlock x:Name="VolumeIcon"
-                                   Text="🔊"
-                                   FontSize="32"
-                                   HorizontalAlignment="Center"
-                                   Margin="0,0,0,8"/>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Padding="20,10,20,8">
+                            <TextBlock x:Name="VolumeIcon"
+                                       Text="&#xE995;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="36"
+                                       Foreground="White"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Border>
                         <TextBlock x:Name="VolumeText"
+                                   Grid.Row="1"
                                    Text="100%"
                                    Foreground="White"
                                    FontWeight="SemiBold"
                                    FontSize="20"
                                    HorizontalAlignment="Center"/>
-                    </StackPanel>
+                    </Grid>
                 </Border>
 
                 <!-- 顶部左侧悬浮触发区域 -->
@@ -517,6 +532,11 @@
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   BorderThickness="0"
                                   Background="Transparent"
+                                  AllowDrop="True"
+                                  PreviewMouseLeftButtonDown="SegmentListView_PreviewMouseLeftButtonDown"
+                                  MouseMove="SegmentListView_MouseMove"
+                                  DragOver="SegmentListView_DragOver"
+                                  Drop="SegmentListView_Drop"
                                   MouseDoubleClick="SegmentListView_MouseDoubleClick">
                             <ListView.ItemTemplate>
                                 <DataTemplate>

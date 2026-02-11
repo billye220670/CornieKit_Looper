@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -157,15 +158,52 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _segmentManager.LoadSegments(metadata.Segments);
                 SelectedLoopMode = metadata.DefaultLoopMode;
                 StatusMessage = $"Loaded {metadata.Segments.Count} segments";
+
+                // 延迟确保UI加载完成
+                await Task.Delay(100);
+
+                // 恢复播放状态
+                if (metadata.WasPlayingSegments && Segments.Count > 0)
+                {
+                    if (metadata.WasPlayingSingleSegment && metadata.LastPlayingSegmentId.HasValue)
+                    {
+                        // 恢复单个segment循环
+                        var targetSegment = Segments.FirstOrDefault(s => s.Id == metadata.LastPlayingSegmentId.Value);
+                        if (targetSegment != null)
+                        {
+                            PlaySegmentCommand.Execute(targetSegment);
+                            StatusMessage = $"Resumed playing segment: {targetSegment.Name}";
+                        }
+                        else
+                        {
+                            // 找不到目标segment，播放第一个
+                            PlaySegmentCommand.Execute(Segments.First());
+                        }
+                    }
+                    else
+                    {
+                        // 恢复segment列表播放
+                        PlayAllSegments();
+                        StatusMessage = "Resumed playing segment list";
+                    }
+                }
+                else
+                {
+                    // 不在播放segments状态，只恢复播放位置
+                    if (metadata.LastPlaybackPosition > TimeSpan.Zero && metadata.LastPlaybackPosition < _videoPlayer.Duration)
+                    {
+                        _videoPlayer.SeekByPosition((float)(metadata.LastPlaybackPosition.TotalSeconds / _videoPlayer.Duration.TotalSeconds));
+                    }
+                    _videoPlayer.Play();
+                }
             }
             else
             {
                 _segmentManager.Clear();
                 StatusMessage = "Video loaded. Press R to mark segments.";
+                // 自动开始播放
+                _videoPlayer.Play();
             }
-
-            // 自动开始播放
-            _videoPlayer.Play();
         }
         catch (OperationCanceledException)
         {
@@ -286,18 +324,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void DeleteSegment(LoopSegmentViewModel segmentViewModel)
+    private async Task DeleteSegment(LoopSegmentViewModel segmentViewModel)
     {
-        var result = MessageBox.Show(
-            $"Delete segment '{segmentViewModel.Name}'?",
-            "Confirm Delete",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
+        // 检查被删除的segment是否是当前正在播放的segment
+        var isPlayingDeletedSegment = _segmentManager.CurrentSegment?.Id == segmentViewModel.Id;
 
-        if (result == MessageBoxResult.Yes)
+        _segmentManager.RemoveSegment(segmentViewModel.Id);
+
+        // 如果删除的是正在播放的segment，需要停止循环
+        if (isPlayingDeletedSegment)
         {
-            _segmentManager.RemoveSegment(segmentViewModel.Id);
-            SaveMetadataAsync().ConfigureAwait(false);
+            _playingSingleSegment = false;
+            _videoPlayer.StopSegmentLoop();
+            _segmentManager.SetCurrentSegment(null);
+            UpdateSegmentPlayingState();
+
+            // 如果还有其他segment，可以选择播放第一个
+            if (Segments.Count > 0)
+            {
+                StatusMessage = "Segment deleted. Playback continues.";
+            }
+            else
+            {
+                StatusMessage = "Last segment deleted.";
+            }
+        }
+
+        // 如果删除后没有segment了，删除.cornieloop文件
+        if (Segments.Count == 0)
+        {
+            await _dataPersistence.DeleteMetadataAsync(CurrentVideoPath);
+            StatusMessage = "All segments deleted. Metadata file removed.";
+        }
+        else
+        {
+            await SaveMetadataAsync();
         }
     }
 
@@ -587,6 +648,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SaveMetadataAsync().ConfigureAwait(false);
     }
 
+    public void ReorderSegments(List<Guid> newOrder)
+    {
+        _segmentManager.ReorderSegments(newOrder);
+        SaveMetadataAsync().ConfigureAwait(false);
+    }
+
+    public async Task SavePlaybackStateAsync()
+    {
+        await SaveMetadataAsync();
+    }
+
     private async Task SaveMetadataAsync()
     {
         if (string.IsNullOrEmpty(CurrentVideoPath))
@@ -594,11 +666,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
+            // 判断是否在播放segments
+            bool wasPlayingSegments = _segmentManager.CurrentSegment != null && IsPlaying;
+
             var metadata = new VideoMetadata
             {
                 VideoFilePath = CurrentVideoPath,
                 Segments = _segmentManager.Segments.ToList(),
-                DefaultLoopMode = SelectedLoopMode
+                DefaultLoopMode = SelectedLoopMode,
+                LastPlaybackPosition = _videoPlayer.CurrentTime,
+                WasPlayingSegments = wasPlayingSegments,
+                WasPlayingSingleSegment = _playingSingleSegment,
+                LastPlayingSegmentId = _segmentManager.CurrentSegment?.Id
             };
 
             await _dataPersistence.SaveMetadataAsync(metadata);

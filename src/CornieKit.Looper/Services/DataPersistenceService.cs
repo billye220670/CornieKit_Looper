@@ -61,6 +61,22 @@ public class DataPersistenceService
         }
     }
 
+    public async Task DeleteMetadataAsync(string videoFilePath)
+    {
+        try
+        {
+            var metadataPath = GetMetadataFilePath(videoFilePath);
+            if (File.Exists(metadataPath))
+            {
+                await Task.Run(() => File.Delete(metadataPath));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to delete metadata: {ex.Message}");
+        }
+    }
+
     private string ComputeFileHash(string filePath)
     {
         try

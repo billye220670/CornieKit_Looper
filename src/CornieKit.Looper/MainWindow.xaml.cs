@@ -1,7 +1,9 @@
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using CornieKit.Looper.ViewModels;
@@ -23,6 +25,9 @@ public partial class MainWindow : Window
     private DateTime _lastWheelTime = DateTime.MinValue;
     private const int FastScrollThresholdMs = 150; // 快速滚动阈值
     private DispatcherTimer? _volumeHudTimer;
+    private string? _originalSegmentName;
+    private Point _dragStartPoint;
+    private bool _isDraggingSegment;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -68,8 +73,10 @@ public partial class MainWindow : Window
         ResetHideTimer();
     }
 
-    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // 在关闭前保存当前播放位置
+        await _viewModel.SavePlaybackStateAsync();
         _viewModel.Dispose();
     }
 
@@ -205,23 +212,8 @@ public partial class MainWindow : Window
         // 更新音量文本
         VolumeText.Text = $"{volume}%";
 
-        // 根据音量更新图标
-        if (volume == 0)
-        {
-            VolumeIcon.Text = "🔇"; // 静音
-        }
-        else if (volume < 33)
-        {
-            VolumeIcon.Text = "🔈"; // 低音量
-        }
-        else if (volume < 66)
-        {
-            VolumeIcon.Text = "🔉"; // 中音量
-        }
-        else
-        {
-            VolumeIcon.Text = "🔊"; // 高音量
-        }
+        // 两态图标：静音 / 正常音量
+        VolumeIcon.Text = volume == 0 ? "\uE74F" : "\uE995";
 
         // 显示HUD
         VolumeHUD.Visibility = Visibility.Visible;
@@ -520,6 +512,9 @@ public partial class MainWindow : Window
 
     private void VideoArea_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // 先检查是否有正在编辑的segment，如果有则应用重命名
+        ApplyRenameIfEditing();
+
         // 获取鼠标位置下的元素
         var element = e.OriginalSource as DependencyObject;
 
@@ -563,6 +558,110 @@ public partial class MainWindow : Window
         }
     }
 
+    #region Segment Drag and Drop Reordering
+
+    private void SegmentListView_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(null);
+        _isDraggingSegment = false;
+    }
+
+    private void SegmentListView_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton == MouseButtonState.Pressed && !_isDraggingSegment)
+        {
+            Point currentPosition = e.GetPosition(null);
+            Vector diff = _dragStartPoint - currentPosition;
+
+            // 检测是否超过拖拽阈值
+            if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+            {
+                // 先应用任何正在进行的重命名
+                ApplyRenameIfEditing();
+
+                // 获取被拖拽的项
+                var listView = sender as ListView;
+                if (listView == null) return;
+
+                var listViewItem = FindAncestor<ListViewItem>((DependencyObject)e.OriginalSource);
+                if (listViewItem == null) return;
+
+                var segmentVm = listViewItem.DataContext as LoopSegmentViewModel;
+                if (segmentVm == null) return;
+
+                _isDraggingSegment = true;
+
+                // 开始拖拽操作
+                var dragData = new DataObject("LoopSegmentViewModel", segmentVm);
+                DragDrop.DoDragDrop(listViewItem, dragData, DragDropEffects.Move);
+
+                _isDraggingSegment = false;
+            }
+        }
+    }
+
+    private void SegmentListView_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent("LoopSegmentViewModel"))
+        {
+            e.Effects = DragDropEffects.Move;
+        }
+        else
+        {
+            e.Effects = DragDropEffects.None;
+        }
+        e.Handled = true;
+    }
+
+    private void SegmentListView_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent("LoopSegmentViewModel"))
+        {
+            var draggedSegment = e.Data.GetData("LoopSegmentViewModel") as LoopSegmentViewModel;
+            if (draggedSegment == null) return;
+
+            // 找到drop目标
+            var targetItem = FindAncestor<ListViewItem>((DependencyObject)e.OriginalSource);
+            if (targetItem == null) return;
+
+            var targetSegment = targetItem.DataContext as LoopSegmentViewModel;
+            if (targetSegment == null || targetSegment == draggedSegment) return;
+
+            // 获取当前顺序
+            var segments = _viewModel.Segments;
+            int draggedIndex = segments.IndexOf(draggedSegment);
+            int targetIndex = segments.IndexOf(targetSegment);
+
+            if (draggedIndex < 0 || targetIndex < 0) return;
+
+            // 移动项
+            segments.Move(draggedIndex, targetIndex);
+
+            // 更新Order并保存
+            var newOrder = segments.Select(s => s.Id).ToList();
+            _viewModel.ReorderSegments(newOrder);
+
+            e.Handled = true;
+        }
+    }
+
+    private static T? FindAncestor<T>(DependencyObject current) where T : DependencyObject
+    {
+        do
+        {
+            if (current is T ancestor)
+            {
+                return ancestor;
+            }
+            current = VisualTreeHelper.GetParent(current);
+        }
+        while (current != null);
+        return null;
+    }
+
+    #endregion
+
     private void SegmentName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is FrameworkElement element && element.DataContext is LoopSegmentViewModel segmentVm)
@@ -581,6 +680,9 @@ public partial class MainWindow : Window
 
         if (_pendingRenameSegment != null)
         {
+            // 保存原始名称，以便Escape时恢复
+            _originalSegmentName = _pendingRenameSegment.Name;
+
             _pendingRenameSegment.IsEditing = true;
             _pendingRenameSegment = null;
 
@@ -602,13 +704,43 @@ public partial class MainWindow : Window
         _pendingRenameSegment = null;
     }
 
+    /// <summary>
+    /// 检查是否有正在编辑的segment，如果有则应用重命名并返回true
+    /// </summary>
+    private bool ApplyRenameIfEditing()
+    {
+        var editingSegment = SegmentsEditingFirstOrDefault();
+        if (editingSegment != null)
+        {
+            editingSegment.IsEditing = false;
+            _viewModel.OnSegmentRenamed();
+            return true;
+        }
+        return false;
+    }
+
     private void RenameTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
         if (sender is TextBox textBox && textBox.DataContext is LoopSegmentViewModel segmentVm)
         {
-            segmentVm.IsEditing = false;
-            _viewModel.OnSegmentRenamed();
+            if (segmentVm.IsEditing)
+            {
+                segmentVm.IsEditing = false;
+                _viewModel.OnSegmentRenamed();
+            }
         }
+    }
+
+    private void MainWindow_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        if (FindParent<TextBox>(source) != null)
+        {
+            return;
+        }
+
+        // 应用重命名（如果正在编辑）
+        ApplyRenameIfEditing();
     }
 
     private void RenameTextBox_KeyDown(object sender, KeyEventArgs e)
@@ -624,6 +756,12 @@ public partial class MainWindow : Window
             }
             else if (e.Key == Key.Escape)
             {
+                // 恢复原始名称
+                if (_originalSegmentName != null)
+                {
+                    segmentVm.Name = _originalSegmentName;
+                    _originalSegmentName = null;
+                }
                 segmentVm.IsEditing = false;
                 e.Handled = true;
                 Focus();
@@ -649,6 +787,38 @@ public partial class MainWindow : Window
         return null;
     }
 
+    private LoopSegmentViewModel? SegmentsEditingFirstOrDefault()
+    {
+        return _viewModel.Segments.FirstOrDefault(segment => segment.IsEditing);
+    }
+
+    private static T? FindParent<T>(DependencyObject? child) where T : DependencyObject
+    {
+        var current = child;
+        while (current != null)
+        {
+            if (current is T parent)
+            {
+                return parent;
+            }
+
+            current = GetParent(current);
+        }
+
+        return null;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject child)
+    {
+        return child switch
+        {
+            System.Windows.Media.Visual => System.Windows.Media.VisualTreeHelper.GetParent(child),
+            System.Windows.Media.Media3D.Visual3D => System.Windows.Media.VisualTreeHelper.GetParent(child),
+            FrameworkContentElement frameworkContentElement => frameworkContentElement.Parent,
+            _ => null
+        };
+    }
+
     private void Exit_Click(object sender, RoutedEventArgs e)
     {
         Close();
@@ -656,6 +826,9 @@ public partial class MainWindow : Window
 
     private void MenuButton_Click(object sender, RoutedEventArgs e)
     {
+        // 先检查是否有正在编辑的segment，如果有则应用重命名
+        ApplyRenameIfEditing();
+
         MenuPopup.IsOpen = !MenuPopup.IsOpen;
     }
 
@@ -688,6 +861,9 @@ public partial class MainWindow : Window
 
     private void SliderOverlay_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        // 先检查是否有正在编辑的segment，如果有则应用重命名
+        ApplyRenameIfEditing();
+
         _isDraggingSlider = true;
         _hideControlsTimer?.Stop(); // 拖动时停止隐藏计时
         _viewModel.OnScrubStart();
