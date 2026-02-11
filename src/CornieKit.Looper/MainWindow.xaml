@@ -171,6 +171,33 @@
             </Setter>
         </Style>
 
+        <!-- 待确认标记样式（蓝色） -->
+        <Style x:Key="PendingMarkerStyle" TargetType="Ellipse">
+            <Setter Property="Fill" Value="#4A90E2"/>
+            <Setter Property="Opacity" Value="0.8"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="#4A90E2" BlurRadius="8" ShadowDepth="0" Opacity="0.5"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Segment起始标记样式（绿色） -->
+        <Style x:Key="StartMarkerStyle" TargetType="Polygon">
+            <Setter Property="Fill" Value="#27AE60"/>
+            <Setter Property="Stroke" Value="White"/>
+            <Setter Property="StrokeThickness" Value="1"/>
+            <Setter Property="Cursor" Value="SizeWE"/>
+        </Style>
+
+        <!-- Segment结束标记样式（红色） -->
+        <Style x:Key="EndMarkerStyle" TargetType="Polygon">
+            <Setter Property="Fill" Value="#E74C3C"/>
+            <Setter Property="Stroke" Value="White"/>
+            <Setter Property="StrokeThickness" Value="1"/>
+            <Setter Property="Cursor" Value="SizeWE"/>
+        </Style>
+
         <!-- 进度条样式 -->
         <Style x:Key="VideoProgressSlider" TargetType="Slider">
             <Setter Property="Template">
@@ -402,6 +429,13 @@
                                     Style="{StaticResource VideoProgressSlider}"
                                     VerticalAlignment="Center"
                                     IsHitTestVisible="False"/>
+
+                            <!-- 标记Canvas层 -->
+                            <Canvas x:Name="MarkerCanvas"
+                                    VerticalAlignment="Stretch"
+                                    IsHitTestVisible="False"
+                                    ClipToBounds="True"/>
+
                             <Border Background="Transparent"
                                     MouseLeftButtonDown="SliderOverlay_MouseDown"
                                     MouseLeftButtonUp="SliderOverlay_MouseUp"

@@ -18,6 +18,9 @@
 4. **Double-click segment** → Loop that segment only
 5. **Click "Play All Segments"** → Play all with selected loop mode
 6. **Click selected segment name → wait 500ms** → Rename mode
+7. **Press 1 to mark start point** → Shows blue marker (works paused or playing)
+8. **Press 2 to mark end point** → Creates segment from marked start to current time
+9. **Select segment → drag green/red markers** → Adjust boundaries with real-time preview
 
 ### Critical Behavior Flags
 - `_playingSingleSegment` (bool): `true` = loop current segment only, `false` = use LoopMode for all segments
@@ -154,6 +157,51 @@ var nextSegment = _segmentManager.GetNextSegment();
 
 **Double-click cancels timer** to prevent rename during play action.
 
+### Numeric Key Marking and Marker Dragging (MainWindow.xaml + MainViewModel.cs)
+
+**Problem**: Users could only record segments by holding R during playback. No way to precisely mark time points or adjust segment boundaries after creation.
+
+**Solution 1 - Numeric Key Marking**:
+```
+OnKey1Pressed():
+  - Marks current playback time as segment start point
+  - Works in paused OR playing state (unlike R key)
+  - Shows blue marker on progress bar
+  - Sets StatusMessage with guidance
+
+OnKey2Pressed():
+  - Validates that start point was marked (press 1 first)
+  - Creates segment from marked start to current time
+  - Auto-loops the newly created segment
+  - Clears the blue marker after creating segment
+```
+
+**Solution 2 - Marker Dragging**:
+- When segment is selected, green (start) and red (end) markers appear on progress bar
+- User can drag markers left/right to adjust times
+- Real-time video preview updates during drag (50ms throttle to prevent excessive seeks)
+- Changes committed only on mouse release
+- Prevents crossing (start can't go right of end, end can't go left of start)
+
+**Implementation Notes**:
+- MarkerCanvas: Transparent Canvas overlay on progress bar grid (ClipToBounds="True")
+- Markers drawn as dynamically created Ellipse elements (not static XAML)
+- Redraw triggered by: property changes (via PropertyChanged event), window resize
+- Dragging behavior reuses `_isScrubbing` and related state from existing slider logic
+- Uses Position (0-1) property for seeking, consistent with existing scrubbing implementation
+
+**Canvas Positioning**:
+```
+MarkerCanvas.ActualWidth = progress bar width in pixels
+Position % * Canvas.ActualWidth = X coordinate of marker
+```
+
+**Color Scheme**:
+- Blue (#4A90E2): Pending start marker (awaiting end point)
+- Green (#27AE60): Segment start boundary
+- Red (#E74C3C): Segment end boundary
+- All with semi-transparent shadow for visibility on any video
+
 ### Data Persistence (DataPersistenceService.cs)
 
 **File Format**: `{VideoFileName}.cornieloop` (JSON)
@@ -246,6 +294,40 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
+- **2026-02-11**: Added numeric key marking and segment boundary dragging
+  - **Numeric Key Marking** (1, 2):
+    - Press 1 to mark segment start point (works in paused state)
+    - Press 2 to mark end point and auto-create segment
+    - Shows blue circular marker on progress bar when start point is marked
+    - Status messages guide user through the marking process
+    - Allows precise manual segment creation without needing to hold R during playback
+  - **Segment Boundary Visualization**:
+    - Selected segment displays green (start) and red (end) circular markers on progress bar
+    - Markers are only shown for the currently selected segment (reduces visual clutter)
+    - Clean visual design with dot + vertical line for each marker
+  - **Marker Dragging**:
+    - Drag segment boundary markers to adjust start/end times in real-time
+    - Video automatically previews the new marker position during drag (throttled to 50ms)
+    - Controls remain visible while dragging (auto-hide timer paused)
+    - Changes saved when mouse released
+    - Prevents invalid state (start can't cross end, end can't cross start)
+  - **Implementation Details**:
+    - MarkerCanvas added to progress bar grid (transparent, clip-to-bounds)
+    - New marker properties in MainViewModel:
+      - `PendingStartMarkerPosition` (0-100): Position of blue "pending" marker
+      - `IsPendingStartMarkerVisible`: Controls visibility of pending marker
+      - `SelectedSegmentStartPosition` / `SelectedSegmentEndPosition`: Positions of green/red markers
+      - `AreSegmentMarkersVisible`: Controls visibility of segment boundary markers
+    - Marker positions updated via `OnSelectedSegmentChanged` handler in ViewModel
+    - Dynamically created Ellipse shapes with mouse event handlers for dragging
+    - Canvas redraws on property changes and window resize
+  - **Keyboard Shortcuts**:
+    - Updated About dialog to document the new 1 and 2 key shortcuts
+    - Keys respect TextBox focus (no interference with rename mode)
+  - **Files Modified**:
+    - MainViewModel.cs: Added 6 new properties, 7 new methods for marker management
+    - MainWindow.xaml: Added MarkerCanvas to progress bar grid
+    - MainWindow.xaml.cs: Added marker rendering, dragging logic, keyboard handlers
 - **2026-02-05**: Added keyboard arrow key navigation shortcuts
   - **Left/Right Arrow**: Seek backward/forward 5 seconds with boundary checks
   - **Up/Down Arrow**: Cycle through segments and auto-play (like double-click)
@@ -348,5 +430,5 @@ If user asks to implement features, clarify:
 
 ---
 
-**Last Updated**: 2026-02-05
-**By**: Claude Sonnet 4.5
+**Last Updated**: 2026-02-11
+**By**: Claude Haiku 4.5

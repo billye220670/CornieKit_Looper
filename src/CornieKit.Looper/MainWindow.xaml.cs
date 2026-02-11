@@ -5,7 +5,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
+using System.ComponentModel;
 using CornieKit.Looper.ViewModels;
 
 namespace CornieKit.Looper;
@@ -28,6 +30,8 @@ public partial class MainWindow : Window
     private string? _originalSegmentName;
     private Point _dragStartPoint;
     private bool _isDraggingSegment;
+    private bool _isDraggingStartMarker;
+    private bool _isDraggingEndMarker;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -71,6 +75,7 @@ public partial class MainWindow : Window
         ShowMenuButton();
         ShowBottomPanel();
         ResetHideTimer();
+        MainWindow_Loaded_Markers();
     }
 
     private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -145,6 +150,18 @@ public partial class MainWindow : Window
         {
             // 下方向键：选择下一个 segment（循环）
             _viewModel.SelectNextSegment();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.D1 && !e.IsRepeat)
+        {
+            // 数字键1：标记起始点
+            _viewModel.OnKey1Pressed();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.D2 && !e.IsRepeat)
+        {
+            // 数字键2：标记结束点并创建segment
+            _viewModel.OnKey2Pressed();
             e.Handled = true;
         }
     }
@@ -397,7 +414,7 @@ public partial class MainWindow : Window
         _hideControlsTimer?.Stop();
 
         // 鼠标不在控制栏上且未拖动时启动隐藏计时
-        if (!_isMouseOverMenuButton && !_isMouseOverBottomPanel && !_isDraggingSlider)
+        if (!_isMouseOverMenuButton && !_isMouseOverBottomPanel && !_isDraggingSlider && !_isDraggingStartMarker && !_isDraggingEndMarker)
         {
             _hideControlsTimer?.Start();
         }
@@ -408,7 +425,7 @@ public partial class MainWindow : Window
         _hideControlsTimer?.Stop();
 
         // 再次检查条件
-        if (!_isMouseOverMenuButton && !_isMouseOverBottomPanel && !_isDraggingSlider)
+        if (!_isMouseOverMenuButton && !_isMouseOverBottomPanel && !_isDraggingSlider && !_isDraggingStartMarker && !_isDraggingEndMarker)
         {
             HideMenuButton();
             HideBottomPanel();
@@ -483,10 +500,10 @@ public partial class MainWindow : Window
             if (files?.Length > 0)
             {
                 var file = files[0];
-                var ext = Path.GetExtension(file).ToLowerInvariant();
+                var ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
                 var videoExtensions = new[] { ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm" };
 
-                if (videoExtensions.Contains(ext))
+                if (videoExtensions.Any(x => x == ext))
                 {
                     await _viewModel.LoadVideoAsync(file);
                 }
@@ -844,11 +861,14 @@ public partial class MainWindow : Window
             "Version 1.3.0\n\n" +
             "Controls:\n" +
             "• R - Hold to record segment\n" +
+            "• 1 - Mark segment start point\n" +
+            "• 2 - Mark segment end point (creates segment)\n" +
             "• Space - Play/Pause\n" +
             "• Tab - Toggle segment panel\n" +
             "• Left/Right Arrow - Seek backward/forward 5 seconds\n" +
             "• Up/Down Arrow - Select previous/next segment (cycle)\n" +
             "• Mouse Wheel - Adjust volume (±5%)\n" +
+            "• Drag marker - Adjust segment boundaries (real-time preview)\n" +
             "• Click video - Play/Pause\n" +
             "• Right-click - Menu\n\n" +
             "Created with LibVLCSharp.",
@@ -905,4 +925,304 @@ public partial class MainWindow : Window
         ratio = Math.Clamp(ratio, 0, 1);
         ProgressSlider.Value = ratio * 100;
     }
+
+    #region Marker Rendering and Dragging
+
+    private const double MarkerLineWidth = 2;
+    private const double MarkerDotRadius = 6;
+    private const double SliderThumbWidth = 14;  // 与XAML中Slider Thumb宽度保持一致
+    private const double SliderThumbRadius = SliderThumbWidth / 2;
+
+    /// <summary>
+    /// 初始化marker canvas和绑定
+    /// </summary>
+    private void MainWindow_Loaded_Markers()
+    {
+        // 延迟初始化，确保Canvas已加载并测量
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            // 订阅marker属性变化
+            if (_viewModel is INotifyPropertyChanged notifyViewModel)
+            {
+                notifyViewModel.PropertyChanged += (s, e) =>
+                {
+                    if (e.PropertyName is "IsPendingStartMarkerVisible" or
+                        "AreSegmentMarkersVisible" or
+                        "SelectedSegmentStartPosition" or
+                        "SelectedSegmentEndPosition" or
+                        "PendingStartMarkerPosition")
+                    {
+                        RedrawMarkers();
+                    }
+                };
+            }
+
+            // 订阅Canvas加载事件和大小变化
+            MarkerCanvas.Loaded += (s, e) => RedrawMarkers();
+            MarkerCanvas.SizeChanged += (s, e) => RedrawMarkers();
+
+            // 初始绘制
+            RedrawMarkers();
+        });
+    }
+
+    /// <summary>
+    /// 重新绘制所有标记
+    /// </summary>
+    private void RedrawMarkers()
+    {
+        // 确保Canvas已加载并有有效的尺寸
+        if (MarkerCanvas == null || MarkerCanvas.ActualWidth <= 0 || MarkerCanvas.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        MarkerCanvas.Children.Clear();
+
+        // 绘制待确认标记（蓝色）
+        if (_viewModel.IsPendingStartMarkerVisible)
+        {
+            DrawPendingMarker(_viewModel.PendingStartMarkerPosition);
+        }
+
+        // 绘制segment边界标记（绿色和红色）
+        if (_viewModel.AreSegmentMarkersVisible)
+        {
+            DrawSegmentMarkers(_viewModel.SelectedSegmentStartPosition, _viewModel.SelectedSegmentEndPosition);
+        }
+    }
+
+    /// <summary>
+    /// 绘制待确认标记（蓝色圆点 + 垂直线）
+    /// </summary>
+    private void DrawPendingMarker(double position)
+    {
+        // 计算位置时考虑Slider Thumb宽度，使标记线对齐到圆点中心
+        var xPos = (position / 100) * (MarkerCanvas.ActualWidth - SliderThumbWidth) + SliderThumbRadius;
+
+        // 垂直线
+        var line = new System.Windows.Shapes.Line
+        {
+            X1 = xPos,
+            Y1 = 0,
+            X2 = xPos,
+            Y2 = MarkerCanvas.ActualHeight,
+            Stroke = new SolidColorBrush(Color.FromArgb(200, 74, 144, 226)),
+            StrokeThickness = MarkerLineWidth,
+            IsHitTestVisible = false
+        };
+
+        // 顶部圆点
+        var dot = new Ellipse
+        {
+            Width = MarkerDotRadius * 2,
+            Height = MarkerDotRadius * 2,
+            Fill = new SolidColorBrush(Color.FromArgb(200, 74, 144, 226)),
+            IsHitTestVisible = false
+        };
+
+        Canvas.SetLeft(dot, xPos - MarkerDotRadius);
+        Canvas.SetTop(dot, -MarkerDotRadius);
+
+        MarkerCanvas.Children.Add(line);
+        MarkerCanvas.Children.Add(dot);
+    }
+
+    /// <summary>
+    /// 绘制segment边界标记（绿色和红色，可拖拽）
+    /// </summary>
+    private void DrawSegmentMarkers(double startPos, double endPos)
+    {
+        // 计算位置时考虑Slider Thumb宽度，使标记线对齐到圆点中心
+        var startXPos = (startPos / 100) * (MarkerCanvas.ActualWidth - SliderThumbWidth) + SliderThumbRadius;
+        var endXPos = (endPos / 100) * (MarkerCanvas.ActualWidth - SliderThumbWidth) + SliderThumbRadius;
+
+        // 起始标记（绿色）
+        DrawSegmentMarker(startXPos, true);
+
+        // 结束标记（红色）
+        DrawSegmentMarker(endXPos, false);
+    }
+
+    /// <summary>
+    /// 绘制单个segment标记（起始或结束）
+    /// </summary>
+    private void DrawSegmentMarker(double xPos, bool isStartMarker)
+    {
+        var color = isStartMarker
+            ? Color.FromArgb(255, 39, 174, 96)   // 绿色
+            : Color.FromArgb(255, 231, 76, 60);  // 红色
+
+        // 垂直线
+        var line = new System.Windows.Shapes.Line
+        {
+            X1 = xPos,
+            Y1 = 0,
+            X2 = xPos,
+            Y2 = MarkerCanvas.ActualHeight,
+            Stroke = new SolidColorBrush(color),
+            StrokeThickness = MarkerLineWidth,
+            IsHitTestVisible = false
+        };
+
+        // 顶部圆点（可拖拽）
+        var dot = new Ellipse
+        {
+            Width = MarkerDotRadius * 2,
+            Height = MarkerDotRadius * 2,
+            Fill = new SolidColorBrush(color),
+            Stroke = Brushes.White,
+            StrokeThickness = 1,
+            Cursor = Cursors.SizeWE,
+            IsHitTestVisible = true
+        };
+
+        Canvas.SetLeft(dot, xPos - MarkerDotRadius);
+        Canvas.SetTop(dot, -MarkerDotRadius);
+
+        // 绑定拖拽事件
+        if (isStartMarker)
+        {
+            dot.MouseLeftButtonDown += StartMarker_MouseDown;
+            dot.MouseMove += StartMarker_MouseMove;
+            dot.MouseLeftButtonUp += StartMarker_MouseUp;
+        }
+        else
+        {
+            dot.MouseLeftButtonDown += EndMarker_MouseDown;
+            dot.MouseMove += EndMarker_MouseMove;
+            dot.MouseLeftButtonUp += EndMarker_MouseUp;
+        }
+
+        MarkerCanvas.Children.Add(line);
+        MarkerCanvas.Children.Add(dot);
+    }
+
+    #region Start Marker Dragging
+
+    private void StartMarker_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingStartMarker = true;
+        _hideControlsTimer?.Stop();
+        _viewModel.OnScrubStart();
+
+        if (sender is UIElement element)
+        {
+            element.CaptureMouse();
+        }
+
+        e.Handled = true;
+    }
+
+    private void StartMarker_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingStartMarker)
+            return;
+
+        // 防护：确保Canvas有有效尺寸
+        if (MarkerCanvas.ActualWidth <= 0)
+            return;
+
+        var position = e.GetPosition(MarkerCanvas);
+
+        // 反向计算：Canvas坐标 → 百分比
+        // xPos = (percentage / 100) * (Canvas.Width - ThumbWidth) + ThumbRadius
+        // 反向推导：percentage = ((position.X - ThumbRadius) / (Canvas.Width - ThumbWidth)) * 100
+        var ratio = (position.X - SliderThumbRadius) / (MarkerCanvas.ActualWidth - SliderThumbWidth);
+        ratio = Math.Clamp(ratio, 0, 1);
+        var newPosition = ratio * 100;
+
+        _viewModel.UpdateSelectedSegmentStartPosition(newPosition);
+        _viewModel.SeekToMarkerPosition(newPosition);
+        RedrawMarkers();
+
+        e.Handled = true;
+    }
+
+    private void StartMarker_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_isDraggingStartMarker)
+        {
+            _isDraggingStartMarker = false;
+
+            if (sender is UIElement element)
+            {
+                element.ReleaseMouseCapture();
+            }
+
+            _viewModel.CommitSegmentMarkerChange();
+            _viewModel.OnScrubEnd();
+            ResetHideTimer();
+            RedrawMarkers();
+        }
+
+        e.Handled = true;
+    }
+
+    #endregion
+
+    #region End Marker Dragging
+
+    private void EndMarker_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingEndMarker = true;
+        _hideControlsTimer?.Stop();
+        _viewModel.OnScrubStart();
+
+        if (sender is UIElement element)
+        {
+            element.CaptureMouse();
+        }
+
+        e.Handled = true;
+    }
+
+    private void EndMarker_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingEndMarker)
+            return;
+
+        // 防护：确保Canvas有有效尺寸
+        if (MarkerCanvas.ActualWidth <= 0)
+            return;
+
+        var position = e.GetPosition(MarkerCanvas);
+
+        // 反向计算：Canvas坐标 → 百分比
+        // xPos = (percentage / 100) * (Canvas.Width - ThumbWidth) + ThumbRadius
+        // 反向推导：percentage = ((position.X - ThumbRadius) / (Canvas.Width - ThumbWidth)) * 100
+        var ratio = (position.X - SliderThumbRadius) / (MarkerCanvas.ActualWidth - SliderThumbWidth);
+        ratio = Math.Clamp(ratio, 0, 1);
+        var newPosition = ratio * 100;
+
+        _viewModel.UpdateSelectedSegmentEndPosition(newPosition);
+        _viewModel.SeekToMarkerPosition(newPosition);
+        RedrawMarkers();
+
+        e.Handled = true;
+    }
+
+    private void EndMarker_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_isDraggingEndMarker)
+        {
+            _isDraggingEndMarker = false;
+
+            if (sender is UIElement element)
+            {
+                element.ReleaseMouseCapture();
+            }
+
+            _viewModel.CommitSegmentMarkerChange();
+            _viewModel.OnScrubEnd();
+            ResetHideTimer();
+            RedrawMarkers();
+        }
+
+        e.Handled = true;
+    }
+
+    #endregion
+
+    #endregion
 }
