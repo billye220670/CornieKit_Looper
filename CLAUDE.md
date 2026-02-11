@@ -13,17 +13,19 @@
 
 ### Key User Workflows
 1. **Open video** → Auto-plays immediately
-2. **Hold R while playing** → Records segment (min 200ms)
-3. **Release R** → Auto-loops the newly created segment
-4. **Double-click segment** → Loop that segment only
-5. **Click "Play All Segments"** → Play all with selected loop mode
-6. **Click selected segment name → wait 500ms** → Rename mode
-7. **Press 1 to mark start point** → Shows blue marker (works paused or playing)
-8. **Press 2 to mark end point** → Creates segment from marked start to current time
-9. **Select segment → drag green/red markers** → Adjust boundaries with real-time preview
+2. **Hold R while playing** → Records segment (min 200ms) → Auto-loops new segment
+3. **Double-click segment** → Enters playback mode, loops that segment only
+4. **Click power icon (top-left of segment panel)** → Toggle between playback mode on/off
+5. **Press 1 then 2** (not in playback mode) → Mark start/end points → Creates new segment
+6. **During playback: Press 1 then 2** → Updates current segment boundaries (green/red markers)
+7. **Click segment name → wait 500ms** → Rename mode
+8. **Drag green/red markers** → Adjust segment boundaries with real-time video preview
+9. **Left/Right Arrow** → Seek ±5 seconds
+10. **Up/Down Arrow** → Select previous/next segment and auto-play
 
 ### Critical Behavior Flags
-- `_playingSingleSegment` (bool): `true` = loop current segment only, `false` = use LoopMode for all segments
+- `IsPlayingAllSegments` (bool): `true` = in playback mode (showing markers), `false` = no segment playback active
+- `_playingSingleSegment` (bool): `true` = looping single segment, `false` = using LoopMode for segment sequencing
 - `_isScrubbing` (bool): Prevents position updates during manual slider drag
 - `IsEditing` (LoopSegmentViewModel): Controls TextBox vs TextBlock visibility for rename
 
@@ -257,11 +259,11 @@ powershell Compress-Archive -Path 'publish\*' -DestinationPath 'CornieKit_Looper
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `MainViewModel.cs` | Core app logic | 360 |
-| `VideoPlayerService.cs` | LibVLC wrapper | 180 |
-| `MainWindow.xaml.cs` | UI event handlers | 260 |
-| `MainWindow.xaml` | Main UI layout | 335 |
-| `SegmentManager.cs` | Segment collection | ~150 |
+| `MainViewModel.cs` | Core app logic, playback state, marker management | ~1050 |
+| `VideoPlayerService.cs` | LibVLC wrapper, position timer (50ms) | 223 |
+| `MainWindow.xaml.cs` | UI event handlers, marker rendering, drag logic | ~1400 |
+| `MainWindow.xaml` | Main UI layout, segment panel, power button | 800+ |
+| `SegmentManager.cs` | Segment collection, loop mode logic | ~150 |
 
 ## Design Decisions
 
@@ -294,6 +296,48 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
+- **2026-02-12**: Major playback state refactoring and UI enhancements
+  - **Playback State Management**:
+    - New `IsPlayingAllSegments` property tracks whether segment playback is active (true for list mode or single loop)
+    - Separated playback state from UI selection: clicking list items no longer affects markers
+    - Only currently playing segment shows visual markers (green start/red end dots)
+    - Markers follow `_segmentManager.CurrentSegment`, not `SelectedSegment`
+  - **List Playback Mode**:
+    - List playback (`IsPlayingAllSegments = true`) persists across video save/load in cornieloop file
+    - Opening video with saved list playback state correctly restores it
+    - Double-clicking segment or pressing 1/2 keys enters list playback mode
+    - Clicking power button (top of segment panel) toggles list playback on/off
+  - **Numeric Key Behavior (1/2 keys)**:
+    - When `IsPlayingAllSegments == true`: Press 1/2 updates current segment boundaries (green/red dots)
+    - When `IsPlayingAllSegments == false`: Press 1 marks pending start (blue dot), press 2 creates new segment with auto-swap
+    - Creating new segment with 1/2 keys automatically enters list playback mode
+  - **UI Improvements**:
+    - Replaced play/pause button with power indicator icon (power.png)
+    - Icon color: Gray (#666666) = playback off, Blue (#4A90E2) = playback on
+    - Removed `IsSelected` visual feedback from list items (gray selection highlight gone)
+    - List items only show hover state and playing segment highlight
+  - **Visual Marker Refinements**:
+    - Removed white stroke/edge from segment marker dots (cleaner appearance)
+    - Reduced color saturation: Green RGB(95,184,120), Red RGB(232,122,112)
+    - Markers only visible during list playback, hidden when stopped
+  - **Stop/Pause Behavior**:
+    - Changed `PlayAllSegments()` stop from `Stop()` to `Pause()` - prevents white screen, pauses at current frame
+    - Exit playback mode with `Pause()` + `StopSegmentLoop()` for smooth UX
+  - **Bug Fixes**:
+    - Fixed UI thread race condition in `OnSegmentLoopCompleted()` - wrapped marker updates in `Dispatcher.Invoke()`
+    - Segment markers now correctly update when playing list transitions to next segment
+    - Marker position properly reflects currently playing segment after loop transition
+  - **Implementation Details**:
+    - New `GetPlayingSegmentVm()` helper finds ViewModel for currently playing segment
+    - Refactored `UpdateSegmentMarkers()` to check `IsPlayingAllSegments` and use `GetPlayingSegmentVm()`
+    - Updated marker drawing in `DrawSegmentMarker()` - removed white stroke, adjusted colors
+    - Key handlers (OnKey1/OnKey2) now use `GetPlayingSegmentVm()` instead of `SelectedSegment`
+    - All segment operations (record, double-click, 1/2 keys) set `IsPlayingAllSegments = true`
+    - All stop/pause operations set `IsPlayingAllSegments = false` and hide markers
+  - **Files Modified**:
+    - MainViewModel.cs: Refactored playback state management, marker logic, key handlers (1000+ lines)
+    - MainWindow.xaml: Replaced play button UI with power icon, removed IsSelected visual trigger
+    - MainWindow.xaml.cs: Fixed OnSegmentLoopCompleted thread safety, simplified marker colors
 - **2026-02-11**: Added numeric key marking and segment boundary dragging
   - **Numeric Key Marking** (1, 2):
     - Press 1 to mark segment start point (works in paused state)

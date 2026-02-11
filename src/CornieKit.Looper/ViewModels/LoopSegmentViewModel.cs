@@ -42,4 +42,15 @@ public partial class LoopSegmentViewModel : ObservableObject
     {
         _segment = segment;
     }
+
+    /// <summary>
+    /// 刷新时间文本显示（在segment的StartTime或EndTime被修改后调用）
+    /// </summary>
+    public void RefreshTimeTexts()
+    {
+        OnPropertyChanged(nameof(TimeRange));
+        OnPropertyChanged(nameof(DurationText));
+        OnPropertyChanged(nameof(StartTime));
+        OnPropertyChanged(nameof(EndTime));
+    }
 }

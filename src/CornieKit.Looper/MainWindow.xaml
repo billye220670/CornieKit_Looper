@@ -148,9 +148,6 @@
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#22FFFFFF"/>
                 </Trigger>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#33FFFFFF"/>
-                </Trigger>
                 <DataTrigger Binding="{Binding IsPlaying}" Value="True">
                     <Setter Property="Background" Value="#442196F3"/>
                 </DataTrigger>
@@ -528,15 +525,40 @@
                         <Border Grid.Row="0" Padding="12,10" BorderBrush="#33FFFFFF" BorderThickness="0,0,0,1">
                             <Grid>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                                    <!-- 播放全部按钮 -->
+                                    <!-- 播放模式开关（电源指示器） -->
                                     <Button Style="{StaticResource OverlayButton}"
                                             Command="{Binding PlayAllSegmentsCommand}"
-                                            ToolTip="Play all segments"
                                             Width="36" Height="36">
-                                        <Rectangle Width="20" Height="20" Fill="White">
-                                            <Rectangle.OpacityMask>
-                                                <ImageBrush ImageSource="/Assets/Icons/play.png"/>
-                                            </Rectangle.OpacityMask>
+                                        <Button.ToolTip>
+                                            <TextBlock>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="Start segment playback"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsPlayingAllSegments, Mode=OneWay}" Value="True">
+                                                                <Setter Property="Text" Value="Stop segment playback"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Button.ToolTip>
+                                        <Rectangle Width="20" Height="20">
+                                            <Rectangle.Style>
+                                                <Style TargetType="Rectangle">
+                                                    <Setter Property="Fill" Value="#666666"/>
+                                                    <Setter Property="OpacityMask">
+                                                        <Setter.Value>
+                                                            <ImageBrush ImageSource="/Assets/Icons/power.png"/>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPlayingAllSegments, Mode=OneWay}" Value="True">
+                                                            <Setter Property="Fill" Value="#4A90E2"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Rectangle.Style>
                                         </Rectangle>
                                     </Button>
                                     <!-- 循环模式按钮 -->

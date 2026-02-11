@@ -2,9 +2,11 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Media3D;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.ComponentModel;
@@ -32,6 +34,15 @@ public partial class MainWindow : Window
     private bool _isDraggingSegment;
     private bool _isDraggingStartMarker;
     private bool _isDraggingEndMarker;
+
+    // 帧步进相关
+    private int _accumulatedFrameSteps = 0;
+    private DateTime _lastFrameStepTime = DateTime.MinValue;
+    private DispatcherTimer? _frameStepTimer;
+    private const double DefaultFrameStepSeconds = 0.5;    // 默认步进0.5秒
+    private const double FineFrameStepSeconds = 0.1;       // Ctrl: 精细步进0.1秒
+    private const double CoarseFrameStepSeconds = 1.5;     // Shift: 粗调步进1.5秒
+    private const int FrameStepThrottleMs = 50;            // 节流：50ms最多执行一次seek
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -66,6 +77,13 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(1)
         };
         _volumeHudTimer.Tick += VolumeHudTimer_Tick;
+
+        // 帧步进延迟执行定时器
+        _frameStepTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(FrameStepThrottleMs)
+        };
+        _frameStepTimer.Tick += FrameStepTimer_Tick;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -177,45 +195,163 @@ public partial class MainWindow : Window
 
     private void VideoOverlayGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        Console.WriteLine($"[VolumeControl] VideoOverlayGrid_PreviewMouseWheel triggered, Delta={e.Delta}");
-
         // 获取鼠标位置下的元素
         var element = e.OriginalSource as DependencyObject;
-        Console.WriteLine($"[VolumeControl] OriginalSource: {element?.GetType().Name ?? "null"}");
 
-        // 检查是否在UI控件上（右侧面板、底部控制栏、进度条等）
+        // 检查是否在进度条区域（优先级最高）
+        if (IsMouseOverProgressBar(element))
+        {
+            // 进度条区域 → 帧步进（类似滚动胶卷）
+            HandleFrameStepping(e.Delta);
+            e.Handled = true;
+            return;
+        }
+
+        // 检查是否在其他UI控件上（右侧面板、底部控制栏等）
         var isOverUI = IsMouseOverUIElement(element);
-        Console.WriteLine($"[VolumeControl] IsMouseOverUIElement={isOverUI}");
 
         if (isOverUI)
         {
-            Console.WriteLine("[VolumeControl] Over UI element, skipping volume adjustment");
-            return; // 在UI控件上，不处理音量调节
+            return; // 在UI控件上，不处理
         }
 
+        // 视频区域 → 音量调节
+        HandleVolumeAdjustment(e.Delta);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 检查鼠标是否在进度条区域（包括Slider、MarkerCanvas、SliderOverlay）
+    /// </summary>
+    private bool IsMouseOverProgressBar(DependencyObject? element)
+    {
+        if (element == null)
+            return false;
+
+        while (element != null)
+        {
+            if (element is FrameworkElement fe)
+            {
+                // 进度条本体或MarkerCanvas或透明覆盖层
+                if (fe.Name == "ProgressSlider" || fe.Name == "MarkerCanvas" ||
+                    (fe is Border && fe.Parent is Grid grid && grid.Children.Contains(ProgressSlider)))
+                {
+                    return true;
+                }
+            }
+
+            // 只对Visual/Visual3D使用VisualTreeHelper
+            if (element is Visual or Visual3D)
+            {
+                element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+            }
+            else if (element is FrameworkContentElement fce)
+            {
+                // 对于非Visual元素（如TextBlock中的Run），使用逻辑树
+                element = fce.Parent;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 处理帧步进（滚轮在进度条区域）
+    /// </summary>
+    private void HandleFrameStepping(int delta)
+    {
+        if (string.IsNullOrEmpty(_viewModel.CurrentVideoPath))
+            return;
+
+        // 累积步进方向（向上=前进，向下=后退）
+        _accumulatedFrameSteps += (delta > 0 ? 1 : -1);
+
+        // 节流检查：距离上次执行是否超过阈值
+        var now = DateTime.Now;
+        var timeSinceLastStep = (now - _lastFrameStepTime).TotalMilliseconds;
+
+        if (timeSinceLastStep < FrameStepThrottleMs)
+        {
+            // 还在节流期内，重启延迟定时器，等待用户停止滚动
+            _frameStepTimer?.Stop();
+            _frameStepTimer?.Start();
+            return;
+        }
+
+        // 立即执行步进
+        ApplyFrameStep();
+    }
+
+    /// <summary>
+    /// 应用累积的帧步进
+    /// </summary>
+    private void ApplyFrameStep()
+    {
+        if (_accumulatedFrameSteps == 0)
+            return;
+
+        // 根据修饰键选择步进大小
+        double stepSize;
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            // Ctrl: 精细步进 0.1秒
+            stepSize = FineFrameStepSeconds;
+        }
+        else if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        {
+            // Shift: 粗调步进 1.5秒
+            stepSize = CoarseFrameStepSeconds;
+        }
+        else
+        {
+            // 默认步进 0.5秒
+            stepSize = DefaultFrameStepSeconds;
+        }
+
+        // 使用ViewModel的SeekRelative方法
+        var stepDelta = stepSize * _accumulatedFrameSteps;
+        _viewModel.SeekRelative(stepDelta);
+
+        // 重置累积
+        _accumulatedFrameSteps = 0;
+        _lastFrameStepTime = DateTime.Now;
+    }
+
+    /// <summary>
+    /// 帧步进定时器：延迟执行，避免快速滚动时频繁seek
+    /// </summary>
+    private void FrameStepTimer_Tick(object? sender, EventArgs e)
+    {
+        _frameStepTimer?.Stop();
+        ApplyFrameStep();
+    }
+
+    /// <summary>
+    /// 处理音量调节（滚轮在视频区域）
+    /// </summary>
+    private void HandleVolumeAdjustment(int delta)
+    {
         // 检测快速向下滚动
         var now = DateTime.Now;
         var timeSinceLastScroll = (now - _lastWheelTime).TotalMilliseconds;
-        Console.WriteLine($"[VolumeControl] Time since last scroll: {timeSinceLastScroll}ms");
 
-        if (e.Delta < 0 && timeSinceLastScroll < FastScrollThresholdMs)
+        if (delta < 0 && timeSinceLastScroll < FastScrollThresholdMs)
         {
             // 快速向下滚动 → 静音
-            Console.WriteLine("[VolumeControl] Fast scroll down detected, muting");
             _viewModel.SetVolume(0);
         }
         else
         {
             // 普通滚动 → ±5% 调节音量
-            var delta = e.Delta > 0 ? 5 : -5;
-            Console.WriteLine($"[VolumeControl] Adjusting volume by {delta}");
-            _viewModel.AdjustVolume(delta);
+            var volumeDelta = delta > 0 ? 5 : -5;
+            _viewModel.AdjustVolume(volumeDelta);
         }
 
         _lastWheelTime = now;
-        e.Handled = true;
-
-        Console.WriteLine($"[VolumeControl] Current volume after adjustment: {_viewModel.CurrentVolume}%");
 
         // 显示音量HUD
         ShowVolumeHUD(_viewModel.CurrentVolume);
@@ -254,56 +390,53 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 检查鼠标是否在UI控件上（右侧面板、底部控制栏、进度条等）
+    /// 检查鼠标是否在UI控件上（右侧面板、底部控制栏等，不包括进度条）
     /// </summary>
     private bool IsMouseOverUIElement(DependencyObject? element)
     {
         if (element == null)
-        {
-            Console.WriteLine("[IsMouseOverUIElement] Element is null, returning false");
             return false;
-        }
 
         // 检查是否在UI控件上
         while (element != null)
         {
             if (element is FrameworkElement fe)
             {
-                Console.WriteLine($"[IsMouseOverUIElement] Checking element: {fe.GetType().Name}, Name={fe.Name}");
-
                 // 检查是否是右侧面板
                 if (fe.Name == "SidePanel" && SidePanel.Visibility == Visibility.Visible)
                 {
-                    Console.WriteLine("[IsMouseOverUIElement] Found SidePanel (visible), returning true");
                     return true;
                 }
 
                 // 检查是否是底部控制面板
                 if (fe.Name == "BottomPanel")
                 {
-                    Console.WriteLine("[IsMouseOverUIElement] Found BottomPanel, returning true");
-                    return true;
-                }
-
-                // 检查是否是进度条
-                if (fe.Name == "ProgressSlider")
-                {
-                    Console.WriteLine("[IsMouseOverUIElement] Found ProgressSlider, returning true");
                     return true;
                 }
 
                 // 检查是否是菜单按钮
                 if (fe.Name == "MenuButton")
                 {
-                    Console.WriteLine("[IsMouseOverUIElement] Found MenuButton, returning true");
                     return true;
                 }
             }
 
-            element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+            // 只对Visual/Visual3D使用VisualTreeHelper
+            if (element is Visual or Visual3D)
+            {
+                element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+            }
+            else if (element is FrameworkContentElement fce)
+            {
+                // 对于非Visual元素（如TextBlock中的Run），使用逻辑树
+                element = fce.Parent;
+            }
+            else
+            {
+                break;
+            }
         }
 
-        Console.WriteLine("[IsMouseOverUIElement] No UI element found, returning false");
         return false;
     }
 
@@ -867,7 +1000,10 @@ public partial class MainWindow : Window
             "• Tab - Toggle segment panel\n" +
             "• Left/Right Arrow - Seek backward/forward 5 seconds\n" +
             "• Up/Down Arrow - Select previous/next segment (cycle)\n" +
-            "• Mouse Wheel - Adjust volume (±5%)\n" +
+            "• Mouse Wheel (video) - Adjust volume (±5%)\n" +
+            "• Mouse Wheel (progress bar) - Frame step (0.5s)\n" +
+            "  • + Ctrl - Fine step (0.1s)\n" +
+            "  • + Shift - Coarse step (1.5s)\n" +
             "• Drag marker - Adjust segment boundaries (real-time preview)\n" +
             "• Click video - Play/Pause\n" +
             "• Right-click - Menu\n\n" +
@@ -961,8 +1097,14 @@ public partial class MainWindow : Window
             MarkerCanvas.Loaded += (s, e) => RedrawMarkers();
             MarkerCanvas.SizeChanged += (s, e) => RedrawMarkers();
 
-            // 初始绘制
+            // 初始绘制，并延迟再次绘制以确保视频加载后的标记也能显示
             RedrawMarkers();
+
+            // 延迟100ms再次检查并绘制，确保视频加载完成后的状态也能正确显示
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+            {
+                RedrawMarkers();
+            });
         });
     }
 
@@ -1050,8 +1192,8 @@ public partial class MainWindow : Window
     private void DrawSegmentMarker(double xPos, bool isStartMarker)
     {
         var color = isStartMarker
-            ? Color.FromArgb(255, 39, 174, 96)   // 绿色
-            : Color.FromArgb(255, 231, 76, 60);  // 红色
+            ? Color.FromArgb(255, 95, 184, 120)   // 柔和绿色（降低饱和度）
+            : Color.FromArgb(255, 232, 122, 112);  // 柔和红色（降低饱和度）
 
         // 垂直线
         var line = new System.Windows.Shapes.Line
@@ -1065,14 +1207,12 @@ public partial class MainWindow : Window
             IsHitTestVisible = false
         };
 
-        // 顶部圆点（可拖拽）
+        // 顶部圆点（可拖拽，无白边）
         var dot = new Ellipse
         {
             Width = MarkerDotRadius * 2,
             Height = MarkerDotRadius * 2,
             Fill = new SolidColorBrush(color),
-            Stroke = Brushes.White,
-            StrokeThickness = 1,
             Cursor = Cursors.SizeWE,
             IsHitTestVisible = true
         };

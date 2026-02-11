@@ -69,7 +69,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedSegmentChanged(LoopSegmentViewModel? value)
     {
-        UpdateSegmentMarkers();
+        // 不在这里更新标记——标记只跟随当前播放的segment
+        // 由PlaySegment/PlayAllSegments/OnKey1/OnKey2等显式调用UpdateSegmentMarkers()
     }
 
     [ObservableProperty]
@@ -89,6 +90,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _areSegmentMarkersVisible;
+
+    [ObservableProperty]
+    private bool _isPlayingAllSegments;
+
+    partial void OnIsPlayingAllSegmentsChanged(bool value)
+    {
+        // 确保UI响应列表播放状态变化
+        Console.WriteLine($"[MainViewModel] IsPlayingAllSegments changed to: {value}");
+    }
 
     public MainViewModel(
         VideoPlayerService videoPlayer,
@@ -164,6 +174,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             DurationText = TimeFormatHelper.FormatTime(_videoPlayer.Duration);
 
             // Reset playback state for new video
+            IsPlayingAllSegments = false;
             _playingSingleSegment = false;
             PlaybackPosition = 0;
 
@@ -290,7 +301,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _videoPlayer.Stop();
         PlaybackPosition = 0;
+        IsPlayingAllSegments = false;
         _playingSingleSegment = false;
+        UpdateSegmentMarkers();
     }
 
     public void OnRecordKeyDown()
@@ -327,6 +340,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SaveMetadataAsync().ConfigureAwait(false);
 
             // 自动开始循环播放新录制的片段
+            IsPlayingAllSegments = true;  // 进入播放状态
             _playingSingleSegment = true;
             _segmentManager.SetCurrentSegment(segment);
             _videoPlayer.PlaySegment(segment);
@@ -338,6 +352,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 SelectedSegment = newSegmentVm;
             }
+            UpdateSegmentMarkers();
         }
 
         IsRecording = false;
@@ -348,6 +363,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void PlaySegment(LoopSegmentViewModel segmentViewModel)
     {
+        IsPlayingAllSegments = true;  // 进入播放状态
         _playingSingleSegment = true;
         _segmentManager.SetCurrentSegment(segmentViewModel.Segment);
         _videoPlayer.PlaySegment(segmentViewModel.Segment);
@@ -355,6 +371,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 设置SelectedSegment以显示标记
         SelectedSegment = segmentViewModel;
+        UpdateSegmentMarkers();
+
+        SaveMetadataAsync().ConfigureAwait(false);
     }
 
     [RelayCommand]
@@ -368,10 +387,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 如果删除的是正在播放的segment，需要停止循环
         if (isPlayingDeletedSegment)
         {
+            IsPlayingAllSegments = false;
             _playingSingleSegment = false;
             _videoPlayer.StopSegmentLoop();
+            _videoPlayer.Pause();  // 暂停在当前位置（不会白屏）
             _segmentManager.SetCurrentSegment(null);
             UpdateSegmentPlayingState();
+            UpdateSegmentMarkers();  // 隐藏标记
 
             // 如果还有其他segment，可以选择播放第一个
             if (Segments.Count > 0)
@@ -387,6 +409,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 如果删除后没有segment了，删除.cornieloop文件
         if (Segments.Count == 0)
         {
+            IsPlayingAllSegments = false;  // 所有segment删除后停止列表播放
             await _dataPersistence.DeleteMetadataAsync(CurrentVideoPath);
             StatusMessage = "All segments deleted. Metadata file removed.";
         }
@@ -402,6 +425,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (Segments.Count == 0)
             return;
 
+        // 如果已经在播放状态，则退出播放模式
+        if (IsPlayingAllSegments)
+        {
+            IsPlayingAllSegments = false;
+            _playingSingleSegment = false;
+            _videoPlayer.StopSegmentLoop();  // 停止循环但不停播放器
+            _videoPlayer.Pause();            // 暂停在当前位置（不会白屏）
+            _segmentManager.SetCurrentSegment(null);
+            UpdateSegmentPlayingState();
+            UpdateSegmentMarkers();  // 隐藏标记
+            SaveMetadataAsync().ConfigureAwait(false);
+            return;
+        }
+
+        // 开始列表播放
+        IsPlayingAllSegments = true;
         _playingSingleSegment = false;
         _segmentManager.SetCurrentSegment(Segments.First().Segment);
         _videoPlayer.PlaySegment(Segments.First().Segment);
@@ -409,6 +448,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 设置SelectedSegment以显示标记
         SelectedSegment = Segments.First();
+        UpdateSegmentMarkers();
+
+        SaveMetadataAsync().ConfigureAwait(false);
     }
 
     partial void OnSelectedLoopModeChanged(LoopMode value)
@@ -450,6 +492,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 使用 Position 进行 seek
         var position = (float)(newTime.TotalSeconds / _videoPlayer.Duration.TotalSeconds);
         _videoPlayer.SeekByPosition(position);
+
+        // 立即更新UI进度条位置（不等待PositionChanged事件）
+        _updatingFromVideo = true;
+        PlaybackPosition = position * 100;
+        CurrentTimeText = TimeFormatHelper.FormatTime(newTime);
+        _updatingFromVideo = false;
+    }
+
+    /// <summary>
+    /// 相对时间跳转（支持小数秒，用于帧步进）
+    /// </summary>
+    public void SeekRelative(double seconds)
+    {
+        if (string.IsNullOrEmpty(CurrentVideoPath) || _videoPlayer.Duration.TotalSeconds == 0)
+            return;
+
+        var currentTime = _videoPlayer.CurrentTime;
+        var newTime = currentTime.Add(TimeSpan.FromSeconds(seconds));
+
+        // 边界检查
+        if (newTime < TimeSpan.Zero)
+            newTime = TimeSpan.Zero;
+        else if (newTime > _videoPlayer.Duration)
+            newTime = _videoPlayer.Duration;
+
+        // 使用 Position 进行 seek
+        var position = (float)(newTime.TotalSeconds / _videoPlayer.Duration.TotalSeconds);
+        _videoPlayer.SeekByPosition(position);
+
+        // 立即更新UI进度条位置（不等待PositionChanged事件）
+        _updatingFromVideo = true;
+        PlaybackPosition = position * 100;
+        CurrentTimeText = TimeFormatHelper.FormatTime(newTime);
+        _updatingFromVideo = false;
     }
 
     /// <summary>
@@ -557,37 +633,102 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (string.IsNullOrEmpty(CurrentVideoPath))
             return;
 
-        _pendingStartTime = _videoPlayer.CurrentTime;
-        PendingStartMarkerPosition = TimeToPosition(_pendingStartTime.Value);
-        IsPendingStartMarkerVisible = true;
-        StatusMessage = "Start point marked. Press 2 to set end point.";
+        var currentTime = _videoPlayer.CurrentTime;
+
+        // 如果正在播放状态，更新当前播放segment的起始点（绿点）
+        var playingVm = GetPlayingSegmentVm();
+        if (IsPlayingAllSegments && playingVm != null)
+        {
+            // 确保新起始点不超过当前结束点
+            if (currentTime < playingVm.Segment.EndTime)
+            {
+                playingVm.Segment.StartTime = currentTime;
+                playingVm.RefreshTimeTexts();
+                UpdateSegmentMarkers();
+                SaveMetadataAsync().ConfigureAwait(false);
+                StatusMessage = $"Segment '{playingVm.Name}' start point updated.";
+
+                // 从新起始点重新开始播放
+                _videoPlayer.PlaySegment(playingVm.Segment);
+            }
+            else
+            {
+                StatusMessage = "Start point must be before end point.";
+            }
+        }
+        else
+        {
+            // 不在播放状态时，标记待定起始点（蓝色线）
+            _pendingStartTime = currentTime;
+            PendingStartMarkerPosition = TimeToPosition(_pendingStartTime.Value);
+            IsPendingStartMarkerVisible = true;
+            StatusMessage = "Start point marked. Press 2 to set end point.";
+        }
     }
 
     /// <summary>
-    /// 按数字键2标记结束点并创建segment
+    /// 按数字键2标记结束点并创建/更新segment
     /// </summary>
     public void OnKey2Pressed()
     {
+        var currentTime = _videoPlayer.CurrentTime;
+
+        // 如果正在播放状态，更新当前播放segment的结束点（红点）
+        var playingVm = GetPlayingSegmentVm();
+        if (IsPlayingAllSegments && playingVm != null)
+        {
+            // 确保新结束点不早于当前起始点
+            if (currentTime > playingVm.Segment.StartTime)
+            {
+                playingVm.Segment.EndTime = currentTime;
+                playingVm.RefreshTimeTexts();
+                UpdateSegmentMarkers();
+                SaveMetadataAsync().ConfigureAwait(false);
+                StatusMessage = $"Segment '{playingVm.Name}' end point updated.";
+
+                // 继续循环播放更新后的segment
+                _videoPlayer.PlaySegment(playingVm.Segment);
+            }
+            else
+            {
+                StatusMessage = "End point must be after start point.";
+            }
+            return;
+        }
+
+        // 不在播放状态时，需要先按1标记起始点（蓝色线）
         if (!_pendingStartTime.HasValue)
         {
             StatusMessage = "Press 1 to mark start point first.";
             return;
         }
 
-        var endTime = _videoPlayer.CurrentTime;
-
-        if (endTime <= _pendingStartTime.Value)
+        // 自动调换顺序：如果当前位置在标记1之前，则互换
+        TimeSpan startTime, endTime;
+        if (currentTime < _pendingStartTime.Value)
         {
-            StatusMessage = "End point must be after start point.";
+            startTime = currentTime;
+            endTime = _pendingStartTime.Value;
+            StatusMessage = "Start and end points swapped automatically.";
+        }
+        else if (currentTime > _pendingStartTime.Value)
+        {
+            startTime = _pendingStartTime.Value;
+            endTime = currentTime;
+        }
+        else
+        {
+            StatusMessage = "Start and end points cannot be the same.";
             return;
         }
 
         // 创建segment
-        var segment = _segmentManager.AddSegment(_pendingStartTime.Value, endTime);
+        var segment = _segmentManager.AddSegment(startTime, endTime);
         StatusMessage = $"Segment created: {segment.Name}";
         SaveMetadataAsync().ConfigureAwait(false);
 
-        // 自动播放新segment
+        // 自动播放新segment，进入播放状态
+        IsPlayingAllSegments = true;
         _playingSingleSegment = true;
         _segmentManager.SetCurrentSegment(segment);
         _videoPlayer.PlaySegment(segment);
@@ -599,6 +740,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             SelectedSegment = newSegmentVm;
         }
+        UpdateSegmentMarkers();
 
         // 清除待确认标记
         _pendingStartTime = null;
@@ -626,12 +768,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// 更新segment边界标记位置
     /// </summary>
+    /// <summary>
+    /// 根据当前正在播放的segment查找对应的ViewModel
+    /// </summary>
+    private LoopSegmentViewModel? GetPlayingSegmentVm()
+    {
+        if (_segmentManager.CurrentSegment == null) return null;
+        return Segments.FirstOrDefault(s => s.Id == _segmentManager.CurrentSegment.Id);
+    }
+
     private void UpdateSegmentMarkers()
     {
-        if (SelectedSegment != null)
+        var playingVm = GetPlayingSegmentVm();
+        if (IsPlayingAllSegments && playingVm != null)
         {
-            SelectedSegmentStartPosition = TimeToPosition(SelectedSegment.Segment.StartTime);
-            SelectedSegmentEndPosition = TimeToPosition(SelectedSegment.Segment.EndTime);
+            SelectedSegmentStartPosition = TimeToPosition(playingVm.Segment.StartTime);
+            SelectedSegmentEndPosition = TimeToPosition(playingVm.Segment.EndTime);
             AreSegmentMarkersVisible = true;
         }
         else
@@ -645,7 +797,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void UpdateSelectedSegmentStartPosition(double newPosition)
     {
-        if (SelectedSegment == null)
+        if (GetPlayingSegmentVm() == null)
             return;
 
         // 限制：起始点不能超过结束点
@@ -662,7 +814,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void UpdateSelectedSegmentEndPosition(double newPosition)
     {
-        if (SelectedSegment == null)
+        if (GetPlayingSegmentVm() == null)
             return;
 
         // 限制：结束点不能小于起始点
@@ -696,17 +848,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void CommitSegmentMarkerChange()
     {
-        if (SelectedSegment == null)
+        var playingVm = GetPlayingSegmentVm();
+        if (playingVm == null)
             return;
 
         // 更新Segment的实际时间
-        SelectedSegment.Segment.StartTime = PositionToTime(SelectedSegmentStartPosition);
-        SelectedSegment.Segment.EndTime = PositionToTime(SelectedSegmentEndPosition);
+        playingVm.Segment.StartTime = PositionToTime(SelectedSegmentStartPosition);
+        playingVm.Segment.EndTime = PositionToTime(SelectedSegmentEndPosition);
+
+        // 刷新UI显示的时间文本
+        playingVm.RefreshTimeTexts();
 
         // 保存到文件
         SaveMetadataAsync().ConfigureAwait(false);
 
-        StatusMessage = $"Segment '{SelectedSegment.Name}' updated.";
+        StatusMessage = $"Segment '{playingVm.Name}' updated.";
     }
 
     partial void OnPlaybackPositionChanged(double value)
@@ -794,7 +950,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _segmentManager.SetCurrentSegment(nextSegment);
             _videoPlayer.PlaySegment(nextSegment);
-            UpdateSegmentPlayingState();
+
+            // 必须在UI线程上更新Observable属性和标记
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                UpdateSegmentPlayingState();
+
+                var nextSegmentVm = Segments.FirstOrDefault(s => s.Id == nextSegment.Id);
+                if (nextSegmentVm != null)
+                {
+                    SelectedSegment = nextSegmentVm;
+                }
+                UpdateSegmentMarkers();
+            });
         }
     }
 
@@ -807,7 +975,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             CurrentTimeText = "00:00";
             _updatingFromVideo = false;
             IsPlaying = false;
+            IsPlayingAllSegments = false;
             _playingSingleSegment = false;
+            UpdateSegmentMarkers();  // 隐藏标记
             StatusMessage = "Playback ended";
         });
     }
@@ -863,8 +1033,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            // 判断是否在播放segments
-            bool wasPlayingSegments = _segmentManager.CurrentSegment != null && IsPlaying;
+            // 保存当前播放状态
+            bool wasPlayingSegments = IsPlayingAllSegments || _playingSingleSegment;
 
             var metadata = new VideoMetadata
             {
