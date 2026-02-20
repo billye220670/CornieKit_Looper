@@ -28,19 +28,20 @@ public partial class App : Application
         base.OnStartup(e);
 
         var mainWindow = _serviceProvider?.GetRequiredService<MainWindow>();
-        mainWindow?.Show();
+        mainWindow?.Show();  // 立即显示窗口，不被 LibVLC 阻塞
 
-        // Handle command line arguments (file path from "Open with" or default program)
-        if (e.Args.Length > 0)
+        // 在后台初始化 LibVLC（冷启动时耗时较长，热启动约2秒）
+        var viewModel = _serviceProvider?.GetRequiredService<MainViewModel>();
+        if (viewModel != null)
         {
-            var filePath = e.Args[0];
-            if (System.IO.File.Exists(filePath))
+            await viewModel.InitializeAsync();
+
+            // Handle command line arguments (file path from "Open with" or default program)
+            if (e.Args.Length > 0)
             {
-                var viewModel = _serviceProvider?.GetRequiredService<MainViewModel>();
-                if (viewModel != null)
+                var filePath = e.Args[0];
+                if (System.IO.File.Exists(filePath))
                 {
-                    // Wait for window to fully load before loading video
-                    await System.Threading.Tasks.Task.Delay(200);
                     await viewModel.LoadVideoAsync(filePath);
                 }
             }

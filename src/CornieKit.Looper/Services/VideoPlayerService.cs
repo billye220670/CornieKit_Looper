@@ -41,7 +41,11 @@ public class VideoPlayerService : IDisposable
             "--aout=directsound",
             "--directx-audio-float32",
             "--file-caching=300",
-            "--no-audio-time-stretch"
+            "--no-audio-time-stretch",
+            "--no-lua",
+            "--no-stats",
+            "--no-sub-autodetect-file",
+            "--quiet",
         };
 
         _libVLC = new LibVLC(options);

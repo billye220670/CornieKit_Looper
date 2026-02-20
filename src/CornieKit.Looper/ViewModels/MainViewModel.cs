@@ -111,10 +111,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _dataPersistence = dataPersistence;
         _recentFiles = recentFiles;
 
-        _videoPlayer.Initialize();
+        // VideoPlayer 在 InitializeAsync() 中异步初始化，不在此处阻塞
+        StatusMessage = "Initializing player...";
+
+        _segmentManager.SegmentsChanged += OnSegmentsChanged;
+        _segmentManager.CurrentSegmentChanged += OnCurrentSegmentChanged;
+
+        _recentFiles.RecentFilesChanged += (s, e) => RefreshRecentFiles();
+        RefreshRecentFiles();
+    }
+
+    /// <summary>
+    /// 在后台线程初始化 LibVLC，使窗口能在 LibVLC 加载之前先显示出来。
+    /// 必须在 LoadVideoAsync 之前调用。
+    /// </summary>
+    public async Task InitializeAsync()
+    {
+        await Task.Run(() => _videoPlayer.Initialize());
+
+        // 初始化完成后回到 UI 线程
         MediaPlayer = _videoPlayer.MediaPlayer;
 
-        // 初始化音量
         _videoPlayer.SetVolume(100);
         CurrentVolume = 100;
 
@@ -125,11 +142,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _videoPlayer.SegmentLoopCompleted += OnSegmentLoopCompleted;
         _videoPlayer.PlaybackEnded += OnPlaybackEnded;
 
-        _segmentManager.SegmentsChanged += OnSegmentsChanged;
-        _segmentManager.CurrentSegmentChanged += OnCurrentSegmentChanged;
-
-        _recentFiles.RecentFilesChanged += (s, e) => RefreshRecentFiles();
-        RefreshRecentFiles();
+        StatusMessage = "Ready";
     }
 
     [RelayCommand]
