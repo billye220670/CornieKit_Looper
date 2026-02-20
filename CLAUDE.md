@@ -27,6 +27,9 @@
 13. **F key** → Reset zoom to fit
 14. **Mouse Wheel on progress bar** → Frame step ±0.5s (Ctrl=0.1s, Shift=1.5s)
 15. **Click/drag volume slider** → Adjust volume; icon click = mute toggle
+16. **Hold filter key + Mouse Wheel** → Adjust color filter; HUD shows current value on press, hides on release
+    - `T` = Color Temperature, `H` = Saturation, `S` = Sharpness
+    - `C` = Contrast, `B` = Brightness, `V` = Vignette, `P` = Skin Tone
 
 ### Critical Behavior Flags
 - `IsPlayingAllSegments` (bool): `true` = in playback mode (showing markers), `false` = no segment playback active
@@ -60,6 +63,11 @@ Models/
   ├── LoopSegment.cs            # Segment data (Id, Name, Start/End times)
   ├── VideoMetadata.cs          # Wrapper for segment list + loop mode
   └── LoopMode.cs               # Enum: Single, Sequential, Random, SequentialLoop
+
+Effects/
+  ├── VideoAdjust.fx            # HLSL ps_3_0 shader source (7 effects)
+  ├── VideoAdjust.ps            # Compiled shader binary (committed to repo)
+  └── VideoAdjustEffect.cs      # WPF ShaderEffect C# wrapper
 
 Converters/
   ├── BoolToVisibilityConverter.cs
@@ -226,7 +234,14 @@ Position % * Canvas.ActualWidth = X coordinate of marker
   "DefaultLoopMode": "Single",
   "ZoomLevel": 1.0,
   "ViewCenterX": 0.5,
-  "ViewCenterY": 0.5
+  "ViewCenterY": 0.5,
+  "ColorTemperature": 0.0,
+  "ColorSaturation": 1.0,
+  "ColorSharpness": 0.0,
+  "ColorContrast": 1.0,
+  "ColorBrightness": 0.0,
+  "ColorVignette": 0.0,
+  "ColorSkinTone": 0.0
 }
 ```
 
@@ -254,6 +269,42 @@ VideoTranslateTransform.Y = -(centerY - 0.5) * renderH * zoom;
 - `RenderTransformOrigin="0.5,0.5"` on the `Image` element
 
 **`F` key**: calls `ResetZoom()` to restore 1:1 fit.
+
+### Pixel Shader Filter System (Effects/)
+
+**Architecture**: WPF `ShaderEffect` subclass wrapping a ps_3_0 HLSL shader compiled by fxc.exe at build time. Applied as `<Image.Effect>` on the video `Image` element.
+
+**Shader register map** (`VideoAdjust.fx`):
+| Register | Property | Range | Default |
+|----------|----------|-------|---------|
+| c0 | Temperature | [-1, +1] | 0.0 |
+| c1 | Saturation | [0, 2] | 1.0 |
+| c2 | Sharpness | [0, 2] | 0.0 |
+| c3 | Contrast | [0.5, 2] | 1.0 |
+| c4/c5 | DdxUV/DdyUV | WPF-injected texel size | — |
+| c6 | Brightness | [-0.5, +0.5] | 0.0 |
+| c7 | Vignette | [0, 1] | 0.0 |
+| c8 | SkinTone | [-1, +1] | 0.0 |
+
+**`DdxUvDdyUvRegisterIndex = 4`** — WPF injects `1/textureWidth` into c4.x and `1/textureHeight` into c5.y; required for the unsharp mask (4-tap cardinal neighbor sampling).
+
+**Shader order of operations**: Sharpness → Brightness → Contrast → Temperature → Saturation → Skin Tone → Vignette
+
+**Skin tone algorithm**: Peer-Phillips normalized-RGB chrominance detection. Detects skin via `rn/gn/bn = R,G,B / (R+G+B)` ratios with `smoothstep` band checks. Runs on the ORIGINAL pixel (before color effects) to prevent corruption of the skin mask by other adjustments.
+
+**Filter key UX** (`MainWindow.xaml.cs`):
+- `_isHoldingX` bool fields (T/H/S/C/B/V/P) set on KeyDown, cleared on KeyUp
+- `ShowFilterHud(text)` appears on initial KeyDown (`!e.IsRepeat`), hides on all flags false
+- Scroll wheel checks flags first (highest priority in `VideoOverlayGrid_PreviewMouseWheel`)
+- `MainWindow_Deactivated` clears all flags + hides HUD when window loses focus
+
+**Build pipeline** (`CornieKit.Looper.csproj`):
+- `CompilePixelShaders` target (BeforeTargets="CoreCompile", **no Inputs/Outputs** — always recompiles) runs fxc.exe with `/T ps_3_0`
+- `CopyShaderToOutput` target (AfterTargets="Build") always copies `.ps` to output dir with `SkipUnchangedFiles="true"`
+- Static `<Content>` item handles `dotnet publish` copy (`CopyToPublishDirectory`)
+- `VideoAdjust.ps` is committed to the repository — guarantees the shader is always available
+
+**Why ps_3_0 instead of ps_2_0**: 7 combined effects exceed ps_2_0's ~64 arithmetic instruction limit. ps_3_0 is supported on all Windows 10/11 GPUs.
 
 ## Known Issues & Limitations
 
@@ -295,11 +346,13 @@ powershell Compress-Archive -Path 'publish\*' -DestinationPath 'CornieKit_Looper
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `MainViewModel.cs` | Core app logic, playback state, marker management, zoom/pan | ~1100 |
+| `MainViewModel.cs` | Core app logic, playback state, marker management, zoom/pan, filter properties | ~1100 |
 | `VideoPlayerService.cs` | LibVLC wrapper, offscreen WriteableBitmap rendering, position timer | ~280 |
-| `MainWindow.xaml.cs` | UI event handlers, marker rendering, drag logic, zoom/pan | ~1650 |
-| `MainWindow.xaml` | Main UI layout, segment panel, power button, volume control | ~810 |
+| `MainWindow.xaml.cs` | UI event handlers, marker rendering, drag logic, zoom/pan, filter HUD | ~1720 |
+| `MainWindow.xaml` | Main UI layout, segment panel, power button, volume control, FilterHUD | ~810 |
 | `SegmentManager.cs` | Segment collection, loop mode logic | ~150 |
+| `Effects/VideoAdjust.fx` | HLSL ps_3_0 shader source (7 effects) | ~115 |
+| `Effects/VideoAdjustEffect.cs` | WPF ShaderEffect C# wrapper with 7 DependencyProperties | ~90 |
 
 ## Design Decisions
 
@@ -332,6 +385,14 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
+- **2026-02-20**: GPU pixel shader filter system
+  - **7-effect ps_3_0 HLSL shader** (`Effects/VideoAdjust.fx`): Temperature, Saturation, Sharpness (unsharp mask), Contrast, Brightness, Vignette, Skin Tone
+  - **Key bindings**: T/H/S/C/B/V/P — hold key to show HUD, scroll to adjust, release to hide
+  - **Skin tone**: Peer-Phillips normalized-RGB chrominance detection; positive = warmer/rosier, negative = cooler/paler; detection runs on original pixel before other effects
+  - **Persistence**: All 7 filter values saved to `.cornieloop` file; restored on video open
+  - **Build pipeline**: fxc.exe compiles `.fx→.ps` at build time; `VideoAdjust.ps` committed to repo; three-layer copy guarantee (CompilePixelShaders `<Copy>`, `CopyShaderToOutput` AfterTargets, `<Content>` item)
+  - **Bug fixed**: `$(MSBuildProjectDirectory)` includes trailing `\`; using `\Effects\` caused double-backslash, breaking `Exists()` condition → shader never copied. Removed `Inputs`/`Outputs` from compile target to prevent incremental-build skip.
+  - **Files Modified/Created**: `Effects/VideoAdjust.fx` (new), `Effects/VideoAdjust.ps` (new), `Effects/VideoAdjustEffect.cs` (new), `CornieKit.Looper.csproj`, `VideoMetadata.cs`, `MainViewModel.cs`, `MainWindow.xaml`, `MainWindow.xaml.cs`
 - **2026-02-20**: UI interaction polish
   - **Volume slider click-anywhere**: Added transparent overlay `Border` over `VolumeSlider` (same pattern as progress bar scrubbing). `VolumeSlider` set `IsHitTestVisible="False"`. Handlers: `VolumeSliderOverlay_MouseDown/Up/Move` + `UpdateVolumeSliderFromMouse`. Clicking anywhere on the track jumps to that position.
   - **Volume scroll wheel hot zone**: Changed `VideoOverlayGrid_PreviewMouseWheel` volume-adjust trigger from `IsMouseOverNamedElement(element, "BottomPanel")` to `IsMouseOverNamedElement(element, "VolumePanel")`. Only the volume icon + slider area triggers volume scroll; rest of bottom panel is neutral.
@@ -481,6 +542,12 @@ When making changes:
 - Implemented click-to-rename (Windows Explorer style)
 
 ## Troubleshooting Common Issues
+
+### "Pixel shader not found" crash at startup
+- Error: `FileNotFoundException: Pixel shader not found at: ...bin\Debug\...\Effects\VideoAdjust.ps`
+- **Root cause A**: MSBuild `Inputs`/`Outputs` incremental check skipped `CompilePixelShaders` target (including its `<Copy>` task) when `.ps` was newer than `.fx`
+- **Root cause B**: `$(MSBuildProjectDirectory)` ends with `\`; `$(MSBuildProjectDirectory)\Effects\` → double-backslash → `Exists()` returned false → `<Content>` item not included
+- **Solution**: `CompilePixelShaders` has no `Inputs`/`Outputs` (always runs); separate `CopyShaderToOutput` target runs `AfterTargets="Build"` unconditionally; `VideoAdjust.ps` committed to repo
 
 ### "Video freezes during scrub"
 - Check `_isScrubbing` flag is set in `OnScrubStart()`
