@@ -6,7 +6,6 @@
         xmlns:local="clr-namespace:CornieKit.Looper"
         xmlns:models="clr-namespace:CornieKit.Looper.Models"
         xmlns:converters="clr-namespace:CornieKit.Looper.Converters"
-        xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         mc:Ignorable="d"
         Title="CornieKit Looper"
         Height="700" Width="1200"
@@ -230,6 +229,49 @@
             </Setter>
         </Style>
 
+        <!-- 音量滑块样式（极简风格） -->
+        <Style x:Key="VolumeSliderStyle" TargetType="Slider">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid>
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="2" Background="#AAFFFFFF" CornerRadius="1"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="2" Background="#44FFFFFF" CornerRadius="1"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Width="10" Height="10" Fill="White"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Window.Resources>
 
     <Window.ContextMenu>
@@ -262,30 +304,33 @@
           KeyboardNavigation.TabNavigation="None"
           KeyboardNavigation.DirectionalNavigation="None">
 
-        <!-- VideoView 作为容器，所有 overlay 放在里面 -->
-        <vlc:VideoView x:Name="VideoView"
-                       Background="Black"
-                       MediaPlayer="{Binding MediaPlayer}"
-                       Focusable="False"
-                       KeyboardNavigation.TabNavigation="None"
-                       KeyboardNavigation.DirectionalNavigation="None">
-            <!--
-                Overlay Grid 背景说明：
-                - 没有视频时使用纯黑色 (#FF000000)，避免 LibVLC hwnd 白色背景在 resize 时闪现
-                - 有视频时使用几乎透明 (#01000000)，让视频可见且能接收鼠标事件
-                通过 InverseEmptyStringToVisibilityConverter 控制背景切换
-            -->
-            <Grid x:Name="VideoOverlayGrid"
-                  AllowDrop="True"
-                  Drop="VideoArea_Drop"
-                  DragEnter="VideoArea_DragEnter"
-                  DragLeave="VideoArea_DragLeave"
-                  MouseMove="VideoOverlay_MouseMove"
-                  MouseLeave="VideoOverlay_MouseLeave"
-                  PreviewMouseLeftButtonUp="VideoOverlayGrid_PreviewMouseLeftButtonUp"
-                  PreviewMouseWheel="VideoOverlayGrid_PreviewMouseWheel">
+        <!-- Video canvas: Image with zoom/pan transforms, ClipToBounds to crop at edges -->
+        <Border x:Name="VideoCanvasBorder" ClipToBounds="True" Background="Black">
+            <Image x:Name="VideoImage"
+                   Source="{Binding VideoSource}"
+                   Stretch="Uniform"
+                   RenderTransformOrigin="0.5,0.5">
+                <Image.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="VideoScaleTransform"/>
+                        <TranslateTransform x:Name="VideoTranslateTransform"/>
+                    </TransformGroup>
+                </Image.RenderTransform>
+            </Image>
+        </Border>
 
-                <!-- 背景层：没有视频时黑色遮盖 hwnd，有视频时近透明 -->
+        <!-- Overlay Grid: sibling of VideoCanvasBorder, NOT inside Image -->
+        <Grid x:Name="VideoOverlayGrid"
+              AllowDrop="True"
+              Drop="VideoArea_Drop"
+              DragEnter="VideoArea_DragEnter"
+              DragLeave="VideoArea_DragLeave"
+              MouseMove="VideoOverlay_MouseMove"
+              MouseLeave="VideoOverlay_MouseLeave"
+              PreviewMouseLeftButtonUp="VideoOverlayGrid_PreviewMouseLeftButtonUp"
+              PreviewMouseWheel="VideoOverlayGrid_PreviewMouseWheel">
+
+                <!-- 背景层：没有视频时黑色遮盖，有视频时近透明 -->
                 <!-- 黑色背景：无视频时显示 -->
                 <Border Background="Black"
                         Visibility="{Binding CurrentVideoPath, Converter={StaticResource EmptyStringToVisibilityConverter}}"/>
@@ -385,7 +430,7 @@
                     </Rectangle>
                 </Button>
 
-                <!-- 底部悬浮触发区域（使用 #01000000 确保能在 hwnd 上方接收鼠标事件） -->
+                <!-- 底部悬浮触发区域 -->
                 <Border x:Name="BottomHoverZone"
                         VerticalAlignment="Bottom"
                         Height="120"
@@ -417,7 +462,7 @@
                         </Grid.RowDefinitions>
 
                         <!-- 进度条行 -->
-                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Grid Grid.Row="0" Margin="0,0,0,12" x:Name="ProgressBarGrid" MinHeight="36">
                             <Slider x:Name="ProgressSlider"
                                     Value="{Binding PlaybackPosition, Mode=TwoWay}"
                                     Minimum="0"
@@ -478,6 +523,50 @@
                                     <Run Text=" / " Foreground="#888"/>
                                     <Run Text="{Binding DurationText, Mode=OneWay}"/>
                                 </TextBlock>
+
+                                <!-- 音量控件 -->
+                                <StackPanel x:Name="VolumePanel"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center"
+                                            Margin="12,0,0,0"
+                                            PreviewMouseWheel="VolumePanel_PreviewMouseWheel">
+                                    <!-- 音量图标按钮（点击切换静音） -->
+                                    <Button Style="{StaticResource OverlayButton}"
+                                            Width="36" Height="36"
+                                            Click="VolumeIcon_Click">
+                                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="16"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="&#xE995;"/>
+                                                    <Setter Property="Foreground" Value="White"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding CurrentVolume}" Value="0">
+                                                            <Setter Property="Text" Value="&#xE74F;"/>
+                                                            <Setter Property="Foreground" Value="#888888"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Button>
+                                    <!-- 音量滑块 -->
+                                    <Grid Width="80" Height="20" VerticalAlignment="Center">
+                                        <Slider x:Name="VolumeSlider"
+                                                Minimum="0" Maximum="100"
+                                                Value="{Binding CurrentVolume, Mode=TwoWay}"
+                                                VerticalAlignment="Center"
+                                                Style="{StaticResource VolumeSliderStyle}"
+                                                IsHitTestVisible="False"/>
+                                        <Border Background="Transparent"
+                                                Cursor="Hand"
+                                                MouseLeftButtonDown="VolumeSliderOverlay_MouseDown"
+                                                MouseLeftButtonUp="VolumeSliderOverlay_MouseUp"
+                                                MouseMove="VolumeSliderOverlay_MouseMove"/>
+                                    </Grid>
+                                </StackPanel>
                             </StackPanel>
 
                             <!-- 中间: 状态信息 -->
@@ -648,9 +737,8 @@
                     </Grid>
                 </Border>
             </Grid>
-        </vlc:VideoView>
 
-        <!-- 菜单弹出层：直接显示历史记录列表 (放在 VideoView 外部避免 hwnd 坐标问题) -->
+        <!-- 菜单弹出层 -->
         <Popup x:Name="MenuPopup"
                PlacementTarget="{Binding ElementName=MenuButton}"
                Placement="Right"

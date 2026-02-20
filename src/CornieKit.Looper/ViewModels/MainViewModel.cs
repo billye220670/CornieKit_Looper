@@ -2,9 +2,9 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using LibVLCSharp.Shared;
 using Microsoft.Win32;
 using CornieKit.Looper.Models;
 using CornieKit.Looper.Services;
@@ -20,7 +20,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly RecentFilesService _recentFiles;
 
     [ObservableProperty]
-    private MediaPlayer? _mediaPlayer;
+    private ImageSource? _videoSource;
 
     [ObservableProperty]
     private string _currentVideoPath = string.Empty;
@@ -57,6 +57,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _loadCancellationToken;
     private TimeSpan? _pendingStartTime;
     private DateTime _lastMarkerSeekTime;
+
+    // Zoom/Pan state
+    private double _zoomLevel = 1.0;
+    private double _viewCenterX = 0.5;
+    private double _viewCenterY = 0.5;
+    private const double MinZoom = 1.0;
+    private const double MaxZoom = 8.0;
+    private const double ZoomStep = 1.2;
+
+    public double ZoomLevel => _zoomLevel;
+    public double ViewCenterX => _viewCenterX;
+    public double ViewCenterY => _viewCenterY;
+
+    /// <summary>
+    /// Fired when zoom/pan state changes. MainWindow subscribes to update Image transforms.
+    /// </summary>
+    public event Action? ZoomPanChanged;
 
     public ObservableCollection<LoopSegmentViewModel> Segments { get; } = new();
     public ObservableCollection<RecentFileItem> RecentFiles { get; } = new();
@@ -129,8 +146,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         await Task.Run(() => _videoPlayer.Initialize());
 
-        // 初始化完成后回到 UI 线程
-        MediaPlayer = _videoPlayer.MediaPlayer;
+        // Subscribe to frame rendering for VideoSource updates
+        _videoPlayer.FrameRendered += (s, e) =>
+        {
+            if (VideoSource != _videoPlayer.VideoSource)
+            {
+                VideoSource = _videoPlayer.VideoSource;
+            }
+        };
 
         _videoPlayer.SetVolume(100);
         CurrentVolume = 100;
@@ -190,6 +213,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             IsPlayingAllSegments = false;
             _playingSingleSegment = false;
             PlaybackPosition = 0;
+            ResetZoom(save: false);
 
             // 添加到最近文件
             _recentFiles.AddRecentFile(filePath);
@@ -204,6 +228,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _segmentManager.LoadSegments(metadata.Segments);
                 SelectedLoopMode = metadata.DefaultLoopMode;
                 StatusMessage = $"Loaded {metadata.Segments.Count} segments";
+
+                // Restore zoom/pan state
+                _zoomLevel = metadata.ZoomLevel < 1.0 ? 1.0 : metadata.ZoomLevel;
+                _viewCenterX = metadata.ViewCenterX;
+                _viewCenterY = metadata.ViewCenterY;
+                if (_zoomLevel <= 1.0) { _viewCenterX = 0.5; _viewCenterY = 0.5; }
+                ZoomPanChanged?.Invoke();
 
                 // 延迟确保UI加载完成
                 await Task.Delay(100);
@@ -355,6 +386,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // 自动开始循环播放新录制的片段
             IsPlayingAllSegments = true;  // 进入播放状态
             _playingSingleSegment = true;
+            SelectedLoopMode = LoopMode.Single;  // 同步UI图标到Single模式
             _segmentManager.SetCurrentSegment(segment);
             _videoPlayer.PlaySegment(segment);
             UpdateSegmentPlayingState();
@@ -377,7 +409,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void PlaySegment(LoopSegmentViewModel segmentViewModel)
     {
         IsPlayingAllSegments = true;  // 进入播放状态
-        _playingSingleSegment = true;
+        _playingSingleSegment = false;
         _segmentManager.SetCurrentSegment(segmentViewModel.Segment);
         _videoPlayer.PlaySegment(segmentViewModel.Segment);
         UpdateSegmentPlayingState();
@@ -469,6 +501,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedLoopModeChanged(LoopMode value)
     {
         _segmentManager.LoopMode = value;
+        // 用户主动切换LoopMode时，退出single-segment锁定模式，改由LoopMode决定下一个segment
+        if (IsPlayingAllSegments && _playingSingleSegment)
+        {
+            _playingSingleSegment = false;
+        }
         SaveMetadataAsync().ConfigureAwait(false);
     }
 
@@ -612,17 +649,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// 当 CurrentVolume 被任意方式修改时（包括滑块拖动），同步到 VideoPlayerService
+    /// </summary>
+    partial void OnCurrentVolumeChanged(int value)
+    {
+        _videoPlayer.SetVolume(value);
+    }
+
+    /// <summary>
     /// 调节音量
     /// </summary>
     public void AdjustVolume(int delta)
     {
         Console.WriteLine($"[MainViewModel] AdjustVolume called, delta={delta}, current={CurrentVolume}");
-        var newVolume = CurrentVolume + delta;
-        newVolume = Math.Clamp(newVolume, 0, 100);
-        CurrentVolume = newVolume;
-        Console.WriteLine($"[MainViewModel] Setting volume to {newVolume}");
-        _videoPlayer.SetVolume(newVolume);
-        Console.WriteLine($"[MainViewModel] Volume set complete, VideoPlayer.Volume={_videoPlayer.Volume}");
+        CurrentVolume = Math.Clamp(CurrentVolume + delta, 0, 100);
     }
 
     /// <summary>
@@ -631,11 +671,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void SetVolume(int volume)
     {
         Console.WriteLine($"[MainViewModel] SetVolume called, volume={volume}");
-        var newVolume = Math.Clamp(volume, 0, 100);
-        CurrentVolume = newVolume;
-        Console.WriteLine($"[MainViewModel] Setting volume to {newVolume}");
-        _videoPlayer.SetVolume(newVolume);
-        Console.WriteLine($"[MainViewModel] Volume set complete, VideoPlayer.Volume={_videoPlayer.Volume}");
+        CurrentVolume = Math.Clamp(volume, 0, 100);
     }
 
     /// <summary>
@@ -743,6 +779,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 自动播放新segment，进入播放状态
         IsPlayingAllSegments = true;
         _playingSingleSegment = true;
+        SelectedLoopMode = LoopMode.Single;  // 同步UI图标到Single模式
         _segmentManager.SetCurrentSegment(segment);
         _videoPlayer.PlaySegment(segment);
         UpdateSegmentPlayingState();
@@ -1057,7 +1094,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 LastPlaybackPosition = _videoPlayer.CurrentTime,
                 WasPlayingSegments = wasPlayingSegments,
                 WasPlayingSingleSegment = _playingSingleSegment,
-                LastPlayingSegmentId = _segmentManager.CurrentSegment?.Id
+                LastPlayingSegmentId = _segmentManager.CurrentSegment?.Id,
+                ZoomLevel = _zoomLevel,
+                ViewCenterX = _viewCenterX,
+                ViewCenterY = _viewCenterY
             };
 
             await _dataPersistence.SaveMetadataAsync(metadata);
@@ -1067,6 +1107,94 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Console.WriteLine($"Failed to save metadata: {ex.Message}");
         }
     }
+
+    #region Zoom/Pan
+
+    /// <summary>
+    /// Zoom toward the point under the cursor.
+    /// relX/relY: mouse position as fraction of rendered video area (0-1).
+    /// delta: positive = zoom in, negative = zoom out.
+    /// </summary>
+    public void ZoomAtPoint(double relX, double relY, int delta)
+    {
+        var oldZoom = _zoomLevel;
+
+        // Current visible area in normalized coords
+        var visW = 1.0 / oldZoom;
+        var visH = 1.0 / oldZoom;
+        var left = _viewCenterX - visW / 2;
+        var top = _viewCenterY - visH / 2;
+
+        // Video point under mouse
+        var videoPointX = left + relX * visW;
+        var videoPointY = top + relY * visH;
+
+        // Compute new zoom
+        var newZoom = delta > 0 ? oldZoom * ZoomStep : oldZoom / ZoomStep;
+        newZoom = Math.Clamp(newZoom, MinZoom, MaxZoom);
+
+        // New center to keep that point fixed under cursor
+        var newVisW = 1.0 / newZoom;
+        var newVisH = 1.0 / newZoom;
+        var newCenterX = videoPointX - relX * newVisW + newVisW / 2;
+        var newCenterY = videoPointY - relY * newVisH + newVisH / 2;
+
+        // Clamp center so we don't pan beyond video edges
+        _zoomLevel = newZoom;
+        _viewCenterX = ClampCenter(newCenterX, newZoom);
+        _viewCenterY = ClampCenter(newCenterY, newZoom);
+
+        ZoomPanChanged?.Invoke();
+        SaveMetadataAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Pan by a delta in normalized video coordinates.
+    /// </summary>
+    public void PanBy(double deltaX, double deltaY)
+    {
+        if (_zoomLevel <= 1.0)
+            return;
+
+        _viewCenterX = ClampCenter(_viewCenterX + deltaX, _zoomLevel);
+        _viewCenterY = ClampCenter(_viewCenterY + deltaY, _zoomLevel);
+
+        ZoomPanChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Save zoom/pan after pan ends (mouse up).
+    /// </summary>
+    public void SaveZoomPanState()
+    {
+        SaveMetadataAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reset zoom to fit-video (1.0) and center.
+    /// </summary>
+    public void ResetZoom(bool save = true)
+    {
+        _zoomLevel = 1.0;
+        _viewCenterX = 0.5;
+        _viewCenterY = 0.5;
+        ZoomPanChanged?.Invoke();
+        if (save) SaveMetadataAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Clamp center so the visible area stays within [0,1].
+    /// </summary>
+    private static double ClampCenter(double center, double zoom)
+    {
+        var halfVis = 0.5 / zoom;
+        var min = halfVis;
+        var max = 1.0 - halfVis;
+        if (min >= max) return 0.5; // fully zoomed out or nearly so
+        return Math.Clamp(center, min, max);
+    }
+
+    #endregion
 
     public void Dispose()
     {

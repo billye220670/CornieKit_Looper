@@ -34,6 +34,11 @@ public partial class MainWindow : Window
     private bool _isDraggingSegment;
     private bool _isDraggingStartMarker;
     private bool _isDraggingEndMarker;
+    private int _preMuteVolume = 100;
+
+    // Zoom/Pan state
+    private bool _isPanning;
+    private Point _panStartPoint;
 
     // 帧步进相关
     private int _accumulatedFrameSteps = 0;
@@ -84,6 +89,9 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(FrameStepThrottleMs)
         };
         _frameStepTimer.Tick += FrameStepTimer_Tick;
+
+        // Subscribe to zoom/pan changes
+        _viewModel.ZoomPanChanged += UpdateVideoTransforms;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -94,6 +102,14 @@ public partial class MainWindow : Window
         ShowBottomPanel();
         ResetHideTimer();
         MainWindow_Loaded_Markers();
+
+        // Wire up middle mouse events for panning on video overlay
+        VideoOverlayGrid.PreviewMouseDown += VideoOverlayGrid_PreviewMouseDown;
+        VideoOverlayGrid.PreviewMouseMove += VideoOverlayGrid_PreviewMouseMove;
+        VideoOverlayGrid.PreviewMouseUp += VideoOverlayGrid_PreviewMouseUp;
+
+        // Apply initial transforms
+        UpdateVideoTransforms();
     }
 
     private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -105,20 +121,24 @@ public partial class MainWindow : Window
 
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (Keyboard.FocusedElement is TextBox)
+            return;
+
         // Tab 键切换右侧面板
         if (e.Key == Key.Tab)
         {
-            if (Keyboard.FocusedElement is TextBox)
-            {
-                return;
-            }
-
             ToggleSidePanel();
 
             // 清除焦点，避免显示虚线框
             Keyboard.ClearFocus();
             Focus();
 
+            e.Handled = true;
+        }
+        // Space 必须在 PreviewKeyDown 里处理，防止焦点在按钮上时被按钮默认消费
+        else if (e.Key == Key.Space && !e.IsRepeat)
+        {
+            _viewModel.TogglePlayPauseCommand.Execute(null);
             e.Handled = true;
         }
     }
@@ -139,11 +159,6 @@ public partial class MainWindow : Window
         if (e.Key == Key.R && !e.IsRepeat)
         {
             _viewModel.OnRecordKeyDown();
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Space && !e.IsRepeat)
-        {
-            _viewModel.TogglePlayPauseCommand.Execute(null);
             e.Handled = true;
         }
         else if (e.Key == Key.Left && !e.IsRepeat)
@@ -182,6 +197,12 @@ public partial class MainWindow : Window
             _viewModel.OnKey2Pressed();
             e.Handled = true;
         }
+        else if (e.Key == Key.F && !e.IsRepeat)
+        {
+            // F key: reset zoom to fit
+            _viewModel.ResetZoom();
+            e.Handled = true;
+        }
     }
 
     private void MainWindow_KeyUp(object sender, KeyEventArgs e)
@@ -195,28 +216,32 @@ public partial class MainWindow : Window
 
     private void VideoOverlayGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        // 获取鼠标位置下的元素
         var element = e.OriginalSource as DependencyObject;
 
-        // 检查是否在进度条区域（优先级最高）
+        // 进度条区域（最高优先级）→ 帧步进
         if (IsMouseOverProgressBar(element))
         {
-            // 进度条区域 → 帧步进（类似滚动胶卷）
             HandleFrameStepping(e.Delta);
             e.Handled = true;
             return;
         }
 
-        // 检查是否在其他UI控件上（右侧面板、底部控制栏等）
-        var isOverUI = IsMouseOverUIElement(element);
-
-        if (isOverUI)
+        // 音量控件区域 → 音量调节
+        if (IsMouseOverNamedElement(element, "VolumePanel"))
         {
-            return; // 在UI控件上，不处理
+            HandleVolumeAdjustment(e.Delta);
+            e.Handled = true;
+            return;
         }
 
-        // 视频区域 → 音量调节
-        HandleVolumeAdjustment(e.Delta);
+        // 右侧面板 / 菜单按钮 → 不处理
+        if (IsMouseOverUIElement(element))
+        {
+            return;
+        }
+
+        // 视频区域（默认）→ 缩放
+        HandleZoom(e);
         e.Handled = true;
     }
 
@@ -232,8 +257,8 @@ public partial class MainWindow : Window
         {
             if (element is FrameworkElement fe)
             {
-                // 进度条本体或MarkerCanvas或透明覆盖层
-                if (fe.Name == "ProgressSlider" || fe.Name == "MarkerCanvas" ||
+                // 进度条本体或MarkerCanvas或透明覆盖层或进度条容器Grid
+                if (fe.Name == "ProgressSlider" || fe.Name == "MarkerCanvas" || fe.Name == "ProgressBarGrid" ||
                     (fe is Border && fe.Parent is Grid grid && grid.Children.Contains(ProgressSlider)))
                 {
                     return true;
@@ -256,6 +281,26 @@ public partial class MainWindow : Window
             }
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// 通用：检查鼠标是否在指定名称的元素内（向上遍历可视树）
+    /// </summary>
+    private static bool IsMouseOverNamedElement(DependencyObject? element, string name)
+    {
+        while (element != null)
+        {
+            if (element is FrameworkElement fe && fe.Name == name)
+                return true;
+
+            if (element is Visual or Visual3D)
+                element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+            else if (element is FrameworkContentElement fce)
+                element = fce.Parent;
+            else
+                break;
+        }
         return false;
     }
 
@@ -375,6 +420,32 @@ public partial class MainWindow : Window
         // 重置隐藏计时器
         _volumeHudTimer?.Stop();
         _volumeHudTimer?.Start();
+    }
+
+    /// <summary>
+    /// 音量面板滚轮：调节音量（悬停在音量控件上时的专属逻辑）
+    /// </summary>
+    private void VolumePanel_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        HandleVolumeAdjustment(e.Delta);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 音量图标按钮点击：切换静音
+    /// </summary>
+    private void VolumeIcon_Click(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.CurrentVolume > 0)
+        {
+            _preMuteVolume = _viewModel.CurrentVolume;
+            _viewModel.SetVolume(0);
+        }
+        else
+        {
+            _viewModel.SetVolume(_preMuteVolume > 0 ? _preMuteVolume : 100);
+        }
+        ShowVolumeHUD(_viewModel.CurrentVolume);
     }
 
     /// <summary>
@@ -1005,6 +1076,9 @@ public partial class MainWindow : Window
             "  • + Ctrl - Fine step (0.1s)\n" +
             "  • + Shift - Coarse step (1.5s)\n" +
             "• Drag marker - Adjust segment boundaries (real-time preview)\n" +
+            "• Alt + Mouse Wheel (video) - Zoom toward cursor\n" +
+            "• Middle Mouse Drag - Pan when zoomed in\n" +
+            "• F - Reset zoom to fit video\n" +
             "• Click video - Play/Pause\n" +
             "• Right-click - Menu\n\n" +
             "Created with LibVLCSharp.",
@@ -1014,6 +1088,7 @@ public partial class MainWindow : Window
     }
 
     private bool _isDraggingSlider;
+    private bool _isDraggingVolumeSlider;
 
     private void SliderOverlay_MouseDown(object sender, MouseButtonEventArgs e)
     {
@@ -1061,6 +1136,203 @@ public partial class MainWindow : Window
         ratio = Math.Clamp(ratio, 0, 1);
         ProgressSlider.Value = ratio * 100;
     }
+
+    private void VolumeSliderOverlay_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingVolumeSlider = true;
+        if (sender is FrameworkElement element)
+        {
+            element.CaptureMouse();
+            UpdateVolumeSliderFromMouse(element, e);
+        }
+        e.Handled = true;
+    }
+
+    private void VolumeSliderOverlay_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingVolumeSlider = false;
+        if (sender is FrameworkElement element)
+            element.ReleaseMouseCapture();
+        e.Handled = true;
+    }
+
+    private void VolumeSliderOverlay_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingVolumeSlider || e.LeftButton != MouseButtonState.Pressed)
+            return;
+        if (sender is FrameworkElement element)
+            UpdateVolumeSliderFromMouse(element, e);
+        e.Handled = true;
+    }
+
+    private void UpdateVolumeSliderFromMouse(FrameworkElement element, MouseEventArgs e)
+    {
+        var position = e.GetPosition(element);
+        var ratio = position.X / element.ActualWidth;
+        ratio = Math.Clamp(ratio, 0, 1);
+        VolumeSlider.Value = ratio * 100;
+    }
+
+    #region Zoom/Pan
+
+    /// <summary>
+    /// Handle Alt+Scroll zoom toward cursor position.
+    /// </summary>
+    private void HandleZoom(MouseWheelEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_viewModel.CurrentVideoPath))
+            return;
+
+        // Get mouse position relative to VideoCanvasBorder (the clipping container)
+        var mousePos = e.GetPosition(VideoCanvasBorder);
+        var containerW = VideoCanvasBorder.ActualWidth;
+        var containerH = VideoCanvasBorder.ActualHeight;
+
+        if (containerW <= 0 || containerH <= 0)
+            return;
+
+        // Calculate the rendered video rect within the container (Stretch=Uniform letterboxing)
+        GetRenderedVideoRect(out var videoLeft, out var videoTop, out var videoW, out var videoH);
+
+        if (videoW <= 0 || videoH <= 0)
+            return;
+
+        // Convert mouse position to normalized video coordinates (0-1)
+        var relX = (mousePos.X - videoLeft) / videoW;
+        var relY = (mousePos.Y - videoTop) / videoH;
+
+        // Clamp to valid range — if mouse is in letterbox, zoom toward nearest edge
+        relX = Math.Clamp(relX, 0, 1);
+        relY = Math.Clamp(relY, 0, 1);
+
+        _viewModel.ZoomAtPoint(relX, relY, e.Delta);
+    }
+
+    /// <summary>
+    /// Calculate the rendered video rectangle within VideoCanvasBorder,
+    /// accounting for Stretch=Uniform letterboxing.
+    /// </summary>
+    private void GetRenderedVideoRect(out double left, out double top, out double width, out double height)
+    {
+        left = top = 0;
+        width = VideoCanvasBorder.ActualWidth;
+        height = VideoCanvasBorder.ActualHeight;
+
+        if (VideoImage.Source == null)
+            return;
+
+        var imageW = VideoImage.Source.Width;
+        var imageH = VideoImage.Source.Height;
+        if (imageW <= 0 || imageH <= 0)
+            return;
+
+        var containerW = VideoCanvasBorder.ActualWidth;
+        var containerH = VideoCanvasBorder.ActualHeight;
+
+        var scaleX = containerW / imageW;
+        var scaleY = containerH / imageH;
+        var uniformScale = Math.Min(scaleX, scaleY);
+
+        width = imageW * uniformScale;
+        height = imageH * uniformScale;
+        left = (containerW - width) / 2;
+        top = (containerH - height) / 2;
+    }
+
+    /// <summary>
+    /// Middle mouse button down: start panning.
+    /// </summary>
+    private void VideoOverlayGrid_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Middle && _viewModel.ZoomLevel > 1.0)
+        {
+            _isPanning = true;
+            _panStartPoint = e.GetPosition(VideoCanvasBorder);
+            VideoOverlayGrid.CaptureMouse();
+            Cursor = Cursors.Hand;
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Middle mouse move: pan the view.
+    /// </summary>
+    private void VideoOverlayGrid_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isPanning)
+            return;
+
+        var currentPoint = e.GetPosition(VideoCanvasBorder);
+        var pixelDeltaX = currentPoint.X - _panStartPoint.X;
+        var pixelDeltaY = currentPoint.Y - _panStartPoint.Y;
+
+        // Convert pixel delta to normalized video-fraction delta
+        GetRenderedVideoRect(out _, out _, out var videoW, out var videoH);
+        if (videoW <= 0 || videoH <= 0)
+            return;
+
+        // Pan direction: dragging right should move the view left (reveal content on the left)
+        var zoomLevel = _viewModel.ZoomLevel;
+        var deltaX = -pixelDeltaX / (videoW * zoomLevel);
+        var deltaY = -pixelDeltaY / (videoH * zoomLevel);
+
+        _viewModel.PanBy(deltaX, deltaY);
+        _panStartPoint = currentPoint;
+
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Middle mouse up: end panning.
+    /// </summary>
+    private void VideoOverlayGrid_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Middle && _isPanning)
+        {
+            _isPanning = false;
+            VideoOverlayGrid.ReleaseMouseCapture();
+            Cursor = Cursors.Arrow;
+            _viewModel.SaveZoomPanState();
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Apply zoom/pan transforms to the VideoImage control.
+    /// Called when ViewModel's ZoomPanChanged fires.
+    /// </summary>
+    private void UpdateVideoTransforms()
+    {
+        var zoom = _viewModel.ZoomLevel;
+        var centerX = _viewModel.ViewCenterX;
+        var centerY = _viewModel.ViewCenterY;
+
+        // With RenderTransformOrigin="0.5,0.5":
+        // ScaleTransform scales around the center of the Image.
+        // TranslateTransform shifts the scaled image.
+        VideoScaleTransform.ScaleX = zoom;
+        VideoScaleTransform.ScaleY = zoom;
+
+        // At zoom=1, center=(0.5,0.5), translate should be 0.
+        // The visible region center is at (centerX, centerY) in normalized coords.
+        // We need to shift so that the video point at (centerX, centerY) appears at the Image center.
+        // Using ActualWidth/Height of the Image for pixel conversion.
+        var renderW = VideoImage.ActualWidth;
+        var renderH = VideoImage.ActualHeight;
+
+        if (renderW > 0 && renderH > 0)
+        {
+            VideoTranslateTransform.X = -(centerX - 0.5) * renderW * zoom;
+            VideoTranslateTransform.Y = -(centerY - 0.5) * renderH * zoom;
+        }
+        else
+        {
+            VideoTranslateTransform.X = 0;
+            VideoTranslateTransform.Y = 0;
+        }
+    }
+
+    #endregion
 
     #region Marker Rendering and Dragging
 

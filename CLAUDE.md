@@ -4,7 +4,7 @@
 
 **CornieKit Looper** is a Windows desktop video player built with .NET 8.0 WPF that enables users to mark and loop specific segments of videos. Primary use cases include music practice, dance learning, and video review.
 
-**Version**: 1.0.3
+**Version**: 1.3.0
 **Repository**: https://github.com/billye220670/CornieKit_Looper
 **Language**: C# (.NET 8.0)
 **Platform**: Windows 10/11
@@ -22,6 +22,11 @@
 8. **Drag green/red markers** → Adjust segment boundaries with real-time video preview
 9. **Left/Right Arrow** → Seek ±5 seconds
 10. **Up/Down Arrow** → Select previous/next segment and auto-play
+11. **Alt + Mouse Wheel** → Zoom toward cursor (zooms into video)
+12. **Middle Mouse Drag** → Pan when zoomed in (hand cursor)
+13. **F key** → Reset zoom to fit
+14. **Mouse Wheel on progress bar** → Frame step ±0.5s (Ctrl=0.1s, Shift=1.5s)
+15. **Click/drag volume slider** → Adjust volume; icon click = mute toggle
 
 ### Critical Behavior Flags
 - `IsPlayingAllSegments` (bool): `true` = in playback mode (showing markers), `false` = no segment playback active
@@ -76,6 +81,12 @@ services.AddSingleton<MainWindow>();
 ## Key Implementation Details
 
 ### Video Playback (VideoPlayerService.cs)
+
+**Rendering Architecture** (current):
+- Uses LibVLC **offscreen video callbacks** (`SetVideoCallbacks`) to decode into a pinned `byte[]` buffer
+- `OnVideoDisplay` callback writes pixels into a WPF `WriteableBitmap` on the UI thread
+- `VideoSource` property (`ImageSource`) exposed to ViewModel/View — bound to a WPF `Image` element
+- Replaces the old `LibVLCSharp.WPF.VideoView` hardware HWND approach, which prevented transforms (zoom/pan)
 
 **LibVLC Options** (Line 38-43):
 ```csharp
@@ -212,11 +223,37 @@ Position % * Canvas.ActualWidth = X coordinate of marker
   "VideoFilePath": "C:\\path\\video.mp4",
   "VideoFileHash": "abc123...",
   "Segments": [...],
-  "DefaultLoopMode": "Single"
+  "DefaultLoopMode": "Single",
+  "ZoomLevel": 1.0,
+  "ViewCenterX": 0.5,
+  "ViewCenterY": 0.5
 }
 ```
 
 **Hash Validation**: Prevents loading segments from different file with same name.
+
+### Zoom/Pan System (MainViewModel.cs + MainWindow.xaml.cs)
+
+**Zoom** (`ZoomAtPoint`):
+- Triggered by `Alt + Mouse Wheel` on the video area
+- Computes normalized cursor position accounting for `Stretch=Uniform` letterboxing via `GetRenderedVideoRect()`
+- Zoom range: 1.0x – 8.0x; clamped by `ClampCenter()`
+- State persisted in `.cornieloop` file (`ZoomLevel`, `ViewCenterX`, `ViewCenterY`)
+
+**Pan** (middle-mouse drag):
+- `VideoOverlayGrid_PreviewMouseDown/Move/Up` handle middle-mouse capture
+- Converts pixel delta to normalized video-fraction delta, accounts for current zoom level
+- Cursor shows `Cursors.Hand` during panning
+
+**Transforms applied via**:
+```csharp
+VideoScaleTransform.ScaleX/Y = zoom;
+VideoTranslateTransform.X = -(centerX - 0.5) * renderW * zoom;
+VideoTranslateTransform.Y = -(centerY - 0.5) * renderH * zoom;
+```
+- `RenderTransformOrigin="0.5,0.5"` on the `Image` element
+
+**`F` key**: calls `ResetZoom()` to restore 1:1 fit.
 
 ## Known Issues & Limitations
 
@@ -232,7 +269,6 @@ Position % * Canvas.ActualWidth = X coordinate of marker
 - Segment thumbnails
 - Export segments to separate files
 - Keyboard shortcut customization
-- Volume control UI (LibVLC supports it via `SetVolume()`)
 - Playback speed control
 
 ## Build & Release
@@ -259,10 +295,10 @@ powershell Compress-Archive -Path 'publish\*' -DestinationPath 'CornieKit_Looper
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `MainViewModel.cs` | Core app logic, playback state, marker management | ~1050 |
-| `VideoPlayerService.cs` | LibVLC wrapper, position timer (50ms) | 223 |
-| `MainWindow.xaml.cs` | UI event handlers, marker rendering, drag logic | ~1400 |
-| `MainWindow.xaml` | Main UI layout, segment panel, power button | 800+ |
+| `MainViewModel.cs` | Core app logic, playback state, marker management, zoom/pan | ~1100 |
+| `VideoPlayerService.cs` | LibVLC wrapper, offscreen WriteableBitmap rendering, position timer | ~280 |
+| `MainWindow.xaml.cs` | UI event handlers, marker rendering, drag logic, zoom/pan | ~1650 |
+| `MainWindow.xaml` | Main UI layout, segment panel, power button, volume control | ~810 |
 | `SegmentManager.cs` | Segment collection, loop mode logic | ~150 |
 
 ## Design Decisions
@@ -296,7 +332,41 @@ When making changes:
 3. **Do** wait for user feedback before next change
 
 ### Recent Changes (Session History)
-- **2026-02-12**: Major playback state refactoring and UI enhancements
+- **2026-02-20**: UI interaction polish
+  - **Volume slider click-anywhere**: Added transparent overlay `Border` over `VolumeSlider` (same pattern as progress bar scrubbing). `VolumeSlider` set `IsHitTestVisible="False"`. Handlers: `VolumeSliderOverlay_MouseDown/Up/Move` + `UpdateVolumeSliderFromMouse`. Clicking anywhere on the track jumps to that position.
+  - **Volume scroll wheel hot zone**: Changed `VideoOverlayGrid_PreviewMouseWheel` volume-adjust trigger from `IsMouseOverNamedElement(element, "BottomPanel")` to `IsMouseOverNamedElement(element, "VolumePanel")`. Only the volume icon + slider area triggers volume scroll; rest of bottom panel is neutral.
+  - **Progress bar scroll zone enlarged**: Added `x:Name="ProgressBarGrid"` and `MinHeight="36"` to the progress bar container `Grid` (was ~20px from Slider height). `IsMouseOverProgressBar` now also checks for `"ProgressBarGrid"` name. Scroll wheel triggers frame-step within the full 36px row.
+  - **Pan cursor**: Changed middle-mouse drag cursor from `Cursors.ScrollAll` (4-way arrow) to `Cursors.Hand`.
+  - **Files Modified**: MainWindow.xaml, MainWindow.xaml.cs
+- **2026-02-15**: Offscreen rendering overhaul + zoom/pan + volume control UI
+  - **Offscreen Rendering**:
+    - Replaced `LibVLCSharp.WPF.VideoView` (HWND-based hardware overlay) with LibVLC software video callbacks (`SetVideoCallbacks`)
+    - VLC decodes into a pinned `byte[]` buffer; `OnVideoDisplay` writes to a `WriteableBitmap` on the UI thread
+    - Exposes `VideoSource` (`ImageSource`) from `VideoPlayerService`, bound to a WPF `<Image>` element
+    - Enables WPF `RenderTransform` (zoom/pan) on the video — impossible with the old HWND overlay
+    - `VideoMetadata.cs` gains `ZoomLevel`, `ViewCenterX`, `ViewCenterY` for persistence
+  - **Zoom/Pan System** (`MainViewModel.cs` + `MainWindow.xaml.cs`):
+    - `Alt + Mouse Wheel` → zoom toward cursor using `GetRenderedVideoRect()` for letterbox-aware coordinates
+    - Middle-mouse drag → pan with `Cursors.Hand`; delta converted from pixels to normalized video fractions
+    - `F` key → `ResetZoom()` restores 1:1 fit
+    - Zoom state saved in `.cornieloop` file; restored on next open
+    - `ZoomPanChanged` event triggers `UpdateVideoTransforms()` which applies `ScaleTransform` + `TranslateTransform`
+  - **Volume Control UI** (`MainWindow.xaml` + `MainWindow.xaml.cs`):
+    - Added `VolumePanel` (StackPanel with volume icon button + `VolumeSlider`) to bottom controls row
+    - `VolumeSliderStyle`: minimalist 2px track + 10px round thumb
+    - Icon button toggles mute (saves pre-mute level to `_preMuteVolume`)
+    - `VolumeHUD`: center-screen overlay showing icon + percentage, auto-hides after 1s
+    - `partial void OnCurrentVolumeChanged(int value)` in ViewModel calls `_videoPlayer.SetVolume()` automatically
+    - Scroll wheel on volume panel adjusts ±5%; rapid downward scroll = instant mute
+  - **Frame Stepping** (scroll wheel on progress bar):
+    - Default: ±0.5s; `Ctrl`: ±0.1s; `Shift`: ±1.5s
+    - Throttled to 50ms with `_frameStepTimer` accumulator to batch rapid scrolls
+  - **Scroll Wheel Routing** (`VideoOverlayGrid_PreviewMouseWheel`):
+    - Progress bar area → frame step
+    - Volume panel → volume adjust
+    - Other UI elements → ignored
+    - Video area → zoom (previously volume)
+  - **Files Modified**: VideoPlayerService.cs (rendering overhaul), MainViewModel.cs (VideoSource, zoom/pan, volume), MainWindow.xaml (volume panel, zoom Image/transforms), MainWindow.xaml.cs (zoom, pan, volume, frame step), VideoMetadata.cs (zoom fields)
   - **Playback State Management**:
     - New `IsPlayingAllSegments` property tracks whether segment playback is active (true for list mode or single loop)
     - Separated playback state from UI selection: clicking list items no longer affects markers
@@ -474,5 +544,5 @@ If user asks to implement features, clarify:
 
 ---
 
-**Last Updated**: 2026-02-11
-**By**: Claude Haiku 4.5
+**Last Updated**: 2026-02-20
+**By**: Claude Sonnet 4.6

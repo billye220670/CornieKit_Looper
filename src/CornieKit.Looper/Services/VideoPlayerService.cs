@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Media.Imaging;
 using LibVLCSharp.Shared;
 using CornieKit.Looper.Models;
 
@@ -12,6 +15,13 @@ public class VideoPlayerService : IDisposable
     private System.Timers.Timer? _positionTimer;
     private LoopSegment? _activeLoopSegment;
 
+    // WriteableBitmap offscreen rendering
+    private IntPtr _videoBuffer;
+    private GCHandle _videoBufferHandle;
+    private uint _videoWidth, _videoHeight, _videoPitch;
+    private WriteableBitmap? _videoSource;
+    private readonly object _videoLock = new();
+
     public MediaPlayer? MediaPlayer => _mediaPlayer;
     public bool IsPlaying => _mediaPlayer?.IsPlaying ?? false;
     public int Volume => _mediaPlayer?.Volume ?? 100;
@@ -22,12 +32,18 @@ public class VideoPlayerService : IDisposable
         ? TimeSpan.FromMilliseconds(_mediaPlayer.Length)
         : TimeSpan.Zero;
 
+    /// <summary>
+    /// WriteableBitmap for WPF Image binding (offscreen rendered video frames)
+    /// </summary>
+    public WriteableBitmap? VideoSource => _videoSource;
+
     public event EventHandler? PlaybackStarted;
     public event EventHandler? PlaybackPaused;
     public event EventHandler? PlaybackStopped;
     public event EventHandler<TimeSpan>? PositionChanged;
     public event EventHandler? SegmentLoopCompleted;
     public event EventHandler? PlaybackEnded;
+    public event EventHandler? FrameRendered;
 
     public void Initialize()
     {
@@ -51,6 +67,10 @@ public class VideoPlayerService : IDisposable
         _libVLC = new LibVLC(options);
         _mediaPlayer = new MediaPlayer(_libVLC);
 
+        // Set up video callbacks for offscreen rendering to WriteableBitmap
+        _mediaPlayer.SetVideoFormatCallbacks(OnVideoFormatSetup, OnVideoFormatCleanup);
+        _mediaPlayer.SetVideoCallbacks(OnVideoLock, null, OnVideoDisplay);
+
         _mediaPlayer.Playing += (s, e) => PlaybackStarted?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.Paused += (s, e) => PlaybackPaused?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.Stopped += (s, e) => PlaybackStopped?.Invoke(this, EventArgs.Empty);
@@ -60,6 +80,108 @@ public class VideoPlayerService : IDisposable
         _positionTimer.Elapsed += OnPositionTimerElapsed;
         // Don't start timer here - it will start when video plays
     }
+
+    #region Video Format/Render Callbacks
+
+    /// <summary>
+    /// Called by LibVLC to negotiate video format. We request BGRA32 (RV32).
+    /// </summary>
+    private uint OnVideoFormatSetup(ref IntPtr opaque, IntPtr chroma, ref uint width, ref uint height, ref uint pitches, ref uint lines)
+    {
+        // Request RV32 (BGRA32) format
+        var chromaBytes = new byte[] { (byte)'R', (byte)'V', (byte)'3', (byte)'2' };
+        Marshal.Copy(chromaBytes, 0, chroma, 4);
+
+        pitches = width * 4;
+        lines = height;
+
+        _videoWidth = width;
+        _videoHeight = height;
+        _videoPitch = pitches;
+
+        // Allocate pinned buffer for VLC to decode into
+        var bufferSize = pitches * lines;
+        var buffer = new byte[bufferSize];
+        _videoBufferHandle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        _videoBuffer = _videoBufferHandle.AddrOfPinnedObject();
+
+        // Copy ref params to locals before capturing in lambda (CS1628)
+        uint capturedWidth = width;
+        uint capturedHeight = height;
+
+        // Create WriteableBitmap on the UI thread
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            _videoSource = new WriteableBitmap(
+                (int)capturedWidth, (int)capturedHeight,
+                96, 96,
+                System.Windows.Media.PixelFormats.Bgra32,
+                null);
+        });
+
+        return 1;
+    }
+
+    /// <summary>
+    /// Called by LibVLC before decoding a frame. Provides the buffer pointer.
+    /// </summary>
+    private IntPtr OnVideoLock(IntPtr opaque, IntPtr planes)
+    {
+        Marshal.WriteIntPtr(planes, _videoBuffer);
+        return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Called by LibVLC after a frame is decoded. Copy buffer to WriteableBitmap.
+    /// </summary>
+    private void OnVideoDisplay(IntPtr opaque, IntPtr picture)
+    {
+        if (_videoSource == null)
+            return;
+
+        Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                if (_videoSource == null || _videoWidth == 0 || _videoHeight == 0)
+                    return;
+
+                _videoSource.Lock();
+                _videoSource.WritePixels(
+                    new Int32Rect(0, 0, (int)_videoWidth, (int)_videoHeight),
+                    _videoBuffer,
+                    (int)(_videoPitch * _videoHeight),
+                    (int)_videoPitch);
+                _videoSource.Unlock();
+
+                FrameRendered?.Invoke(this, EventArgs.Empty);
+            }
+            catch
+            {
+                // Ignore rendering errors during shutdown/format change
+            }
+        });
+    }
+
+    /// <summary>
+    /// Called by LibVLC when video format changes or playback ends.
+    /// </summary>
+    private void OnVideoFormatCleanup(ref IntPtr opaque)
+    {
+        lock (_videoLock)
+        {
+            if (_videoBufferHandle.IsAllocated)
+            {
+                _videoBufferHandle.Free();
+            }
+            _videoBuffer = IntPtr.Zero;
+            _videoWidth = 0;
+            _videoHeight = 0;
+            _videoPitch = 0;
+        }
+    }
+
+    #endregion
 
     public async Task<bool> LoadVideoAsync(string filePath)
     {
@@ -220,6 +342,15 @@ public class VideoPlayerService : IDisposable
         _currentMedia?.Dispose();
         _mediaPlayer?.Dispose();
         _libVLC?.Dispose();
+
+        // Clean up video buffer
+        lock (_videoLock)
+        {
+            if (_videoBufferHandle.IsAllocated)
+            {
+                _videoBufferHandle.Free();
+            }
+        }
 
         _isDisposed = true;
         GC.SuppressFinalize(this);
