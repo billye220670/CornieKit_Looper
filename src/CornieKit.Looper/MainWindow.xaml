@@ -6,6 +6,7 @@
         xmlns:local="clr-namespace:CornieKit.Looper"
         xmlns:models="clr-namespace:CornieKit.Looper.Models"
         xmlns:converters="clr-namespace:CornieKit.Looper.Converters"
+        xmlns:effects="clr-namespace:CornieKit.Looper.Effects"
         mc:Ignorable="d"
         Title="CornieKit Looper"
         Height="700" Width="1200"
@@ -310,6 +311,16 @@
                    Source="{Binding VideoSource}"
                    Stretch="Uniform"
                    RenderTransformOrigin="0.5,0.5">
+                <Image.Effect>
+                    <effects:VideoAdjustEffect
+                        Temperature="{Binding ColorTemperature}"
+                        Saturation="{Binding ColorSaturation}"
+                        Sharpness="{Binding ColorSharpness}"
+                        Contrast="{Binding ColorContrast}"
+                        Brightness="{Binding ColorBrightness}"
+                        Vignette="{Binding ColorVignette}"
+                        SkinTone="{Binding ColorSkinTone}"/>
+                </Image.Effect>
                 <Image.RenderTransform>
                     <TransformGroup>
                         <ScaleTransform x:Name="VideoScaleTransform"/>
@@ -400,6 +411,23 @@
                                    FontSize="20"
                                    HorizontalAlignment="Center"/>
                     </Grid>
+                </Border>
+
+                <!-- 滤镜调节HUD（色温/饱和度） -->
+                <Border x:Name="FilterHUD"
+                        Background="#CC000000"
+                        Padding="24,14"
+                        CornerRadius="8"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Margin="0,-100,0,0"
+                        Visibility="Collapsed"
+                        Opacity="0">
+                    <TextBlock x:Name="FilterHUDText"
+                               Foreground="White"
+                               FontSize="18"
+                               FontWeight="Medium"
+                               HorizontalAlignment="Center"/>
                 </Border>
 
                 <!-- 顶部左侧悬浮触发区域 -->

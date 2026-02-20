@@ -70,6 +70,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public double ViewCenterX => _viewCenterX;
     public double ViewCenterY => _viewCenterY;
 
+    // Filter state
+    private double _colorTemperature = 0.0;
+    private double _colorSaturation = 1.0;
+    private double _colorSharpness = 0.0;
+    private double _colorContrast = 1.0;
+    private double _colorBrightness = 0.0;
+    private double _colorVignette = 0.0;
+    private double _colorSkinTone = 0.0;
+
+    public double ColorTemperature
+    {
+        get => _colorTemperature;
+        set { var v = Math.Clamp(value, -1.0, 1.0); if (Math.Abs(_colorTemperature - v) < 0.0001) return; _colorTemperature = v; OnPropertyChanged(); }
+    }
+    public double ColorSaturation
+    {
+        get => _colorSaturation;
+        set { var v = Math.Clamp(value, 0.0, 2.0); if (Math.Abs(_colorSaturation - v) < 0.0001) return; _colorSaturation = v; OnPropertyChanged(); }
+    }
+    public double ColorSharpness
+    {
+        get => _colorSharpness;
+        set { var v = Math.Clamp(value, 0.0, 2.0); if (Math.Abs(_colorSharpness - v) < 0.0001) return; _colorSharpness = v; OnPropertyChanged(); }
+    }
+    public double ColorContrast
+    {
+        get => _colorContrast;
+        set { var v = Math.Clamp(value, 0.5, 2.0); if (Math.Abs(_colorContrast - v) < 0.0001) return; _colorContrast = v; OnPropertyChanged(); }
+    }
+    public double ColorBrightness
+    {
+        get => _colorBrightness;
+        set { var v = Math.Clamp(value, -0.5, 0.5); if (Math.Abs(_colorBrightness - v) < 0.0001) return; _colorBrightness = v; OnPropertyChanged(); }
+    }
+    public double ColorVignette
+    {
+        get => _colorVignette;
+        set { var v = Math.Clamp(value, 0.0, 1.0); if (Math.Abs(_colorVignette - v) < 0.0001) return; _colorVignette = v; OnPropertyChanged(); }
+    }
+    public double ColorSkinTone
+    {
+        get => _colorSkinTone;
+        set { var v = Math.Clamp(value, -1.0, 1.0); if (Math.Abs(_colorSkinTone - v) < 0.0001) return; _colorSkinTone = v; OnPropertyChanged(); }
+    }
+
+    public void AdjustColorTemperature(int direction) { ColorTemperature = Math.Clamp(_colorTemperature + direction * 0.05, -1.0,  1.0); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorSaturation(int direction)  { ColorSaturation  = Math.Clamp(_colorSaturation  + direction * 0.05,  0.0,  2.0); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorSharpness(int direction)   { ColorSharpness   = Math.Clamp(_colorSharpness   + direction * 0.10,  0.0,  2.0); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorContrast(int direction)    { ColorContrast    = Math.Clamp(_colorContrast    + direction * 0.05,  0.5,  2.0); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorBrightness(int direction)  { ColorBrightness  = Math.Clamp(_colorBrightness  + direction * 0.025,-0.5,  0.5); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorVignette(int direction)    { ColorVignette    = Math.Clamp(_colorVignette    + direction * 0.05,  0.0,  1.0); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorSkinTone(int direction)    { ColorSkinTone    = Math.Clamp(_colorSkinTone    + direction * 0.05, -1.0,  1.0); SaveMetadataAsync().ConfigureAwait(false); }
+
     /// <summary>
     /// Fired when zoom/pan state changes. MainWindow subscribes to update Image transforms.
     /// </summary>
@@ -235,6 +288,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _viewCenterY = metadata.ViewCenterY;
                 if (_zoomLevel <= 1.0) { _viewCenterX = 0.5; _viewCenterY = 0.5; }
                 ZoomPanChanged?.Invoke();
+
+                // Restore filter state
+                ColorTemperature = metadata.ColorTemperature;
+                ColorSaturation = metadata.ColorSaturation;
+                ColorSharpness = metadata.ColorSharpness;
+                ColorContrast = metadata.ColorContrast;
+                ColorBrightness = metadata.ColorBrightness;
+                ColorVignette = metadata.ColorVignette;
+                ColorSkinTone = metadata.ColorSkinTone;
 
                 // 延迟确保UI加载完成
                 await Task.Delay(100);
@@ -1097,7 +1159,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 LastPlayingSegmentId = _segmentManager.CurrentSegment?.Id,
                 ZoomLevel = _zoomLevel,
                 ViewCenterX = _viewCenterX,
-                ViewCenterY = _viewCenterY
+                ViewCenterY = _viewCenterY,
+                ColorTemperature = _colorTemperature,
+                ColorSaturation = _colorSaturation,
+                ColorSharpness = _colorSharpness,
+                ColorContrast = _colorContrast,
+                ColorBrightness = _colorBrightness,
+                ColorVignette = _colorVignette,
+                ColorSkinTone = _colorSkinTone
             };
 
             await _dataPersistence.SaveMetadataAsync(metadata);

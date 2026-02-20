@@ -40,6 +40,15 @@ public partial class MainWindow : Window
     private bool _isPanning;
     private Point _panStartPoint;
 
+    // 滤镜修改键按住状态
+    private bool _isHoldingT;
+    private bool _isHoldingH;
+    private bool _isHoldingS;
+    private bool _isHoldingC;
+    private bool _isHoldingB;
+    private bool _isHoldingV;
+    private bool _isHoldingP;
+
     // 帧步进相关
     private int _accumulatedFrameSteps = 0;
     private DateTime _lastFrameStepTime = DateTime.MinValue;
@@ -92,6 +101,9 @@ public partial class MainWindow : Window
 
         // Subscribe to zoom/pan changes
         _viewModel.ZoomPanChanged += UpdateVideoTransforms;
+
+        // Hide filter HUD when window loses focus
+        Deactivated += MainWindow_Deactivated;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -203,6 +215,13 @@ public partial class MainWindow : Window
             _viewModel.ResetZoom();
             e.Handled = true;
         }
+        else if (e.Key == Key.T && !e.IsRepeat) { _isHoldingT = true; ShowFilterHud(TempHudText());       e.Handled = true; }
+        else if (e.Key == Key.H && !e.IsRepeat) { _isHoldingH = true; ShowFilterHud(SatHudText());        e.Handled = true; }
+        else if (e.Key == Key.S && !e.IsRepeat) { _isHoldingS = true; ShowFilterHud(SharpHudText());      e.Handled = true; }
+        else if (e.Key == Key.C && !e.IsRepeat) { _isHoldingC = true; ShowFilterHud(ContrastHudText());   e.Handled = true; }
+        else if (e.Key == Key.B && !e.IsRepeat) { _isHoldingB = true; ShowFilterHud(BrightnessHudText()); e.Handled = true; }
+        else if (e.Key == Key.V && !e.IsRepeat) { _isHoldingV = true; ShowFilterHud(VignetteHudText());   e.Handled = true; }
+        else if (e.Key == Key.P && !e.IsRepeat) { _isHoldingP = true; ShowFilterHud(SkinHudText());       e.Handled = true; }
     }
 
     private void MainWindow_KeyUp(object sender, KeyEventArgs e)
@@ -212,11 +231,27 @@ public partial class MainWindow : Window
             _viewModel.OnRecordKeyUp();
             e.Handled = true;
         }
+        else if (e.Key == Key.T) { _isHoldingT = false; TryHideFilterHud(); }
+        else if (e.Key == Key.H) { _isHoldingH = false; TryHideFilterHud(); }
+        else if (e.Key == Key.S) { _isHoldingS = false; TryHideFilterHud(); }
+        else if (e.Key == Key.C) { _isHoldingC = false; TryHideFilterHud(); }
+        else if (e.Key == Key.B) { _isHoldingB = false; TryHideFilterHud(); }
+        else if (e.Key == Key.V) { _isHoldingV = false; TryHideFilterHud(); }
+        else if (e.Key == Key.P) { _isHoldingP = false; TryHideFilterHud(); }
     }
 
     private void VideoOverlayGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
         var element = e.OriginalSource as DependencyObject;
+
+        // 最高优先级：滤镜修改键按住时调节对应滤镜
+        if (_isHoldingT) { _viewModel.AdjustColorTemperature(Math.Sign(e.Delta)); FilterHUDText.Text = TempHudText();      e.Handled = true; return; }
+        if (_isHoldingH) { _viewModel.AdjustColorSaturation(Math.Sign(e.Delta));  FilterHUDText.Text = SatHudText();       e.Handled = true; return; }
+        if (_isHoldingS) { _viewModel.AdjustColorSharpness(Math.Sign(e.Delta));   FilterHUDText.Text = SharpHudText();     e.Handled = true; return; }
+        if (_isHoldingC) { _viewModel.AdjustColorContrast(Math.Sign(e.Delta));    FilterHUDText.Text = ContrastHudText();  e.Handled = true; return; }
+        if (_isHoldingB) { _viewModel.AdjustColorBrightness(Math.Sign(e.Delta));  FilterHUDText.Text = BrightnessHudText(); e.Handled = true; return; }
+        if (_isHoldingV) { _viewModel.AdjustColorVignette(Math.Sign(e.Delta));    FilterHUDText.Text = VignetteHudText();  e.Handled = true; return; }
+        if (_isHoldingP) { _viewModel.AdjustColorSkinTone(Math.Sign(e.Delta));    FilterHUDText.Text = SkinHudText();      e.Handled = true; return; }
 
         // 进度条区域（最高优先级）→ 帧步进
         if (IsMouseOverProgressBar(element))
@@ -459,6 +494,40 @@ public partial class MainWindow : Window
             VolumeHUD.Visibility = Visibility.Collapsed;
         });
     }
+
+    /// <summary>
+    /// 显示滤镜HUD（按住修改键时显示，松开消失）
+    /// </summary>
+    private void ShowFilterHud(string text)
+    {
+        FilterHUDText.Text = text;
+        if (FilterHUD.Visibility == Visibility.Visible)
+            return; // already visible — just update text above
+        FilterHUD.Visibility = Visibility.Visible;
+        AnimateOpacity(FilterHUD, 0, 1, 120);
+    }
+
+    private void HideFilterHud()
+    {
+        AnimateOpacity(FilterHUD, FilterHUD.Opacity, 0, 180, () =>
+            FilterHUD.Visibility = Visibility.Collapsed);
+    }
+
+    private void TryHideFilterHud()
+    {
+        if (!_isHoldingT && !_isHoldingH && !_isHoldingS &&
+            !_isHoldingC && !_isHoldingB && !_isHoldingV && !_isHoldingP)
+            HideFilterHud();
+    }
+
+    // HUD text formatters
+    private string TempHudText()      { int v = (int)Math.Round(_viewModel.ColorTemperature * 100); return $"色温  {(v >= 0 ? "+" : "")}{v}%"; }
+    private string SatHudText()       { return $"饱和度  {(int)Math.Round(_viewModel.ColorSaturation * 100)}%"; }
+    private string SharpHudText()     { return $"锐化  {(int)Math.Round(_viewModel.ColorSharpness * 50)}%"; }
+    private string ContrastHudText()  { int v = (int)Math.Round((_viewModel.ColorContrast - 1.0) * 100); return $"对比度  {(v >= 0 ? "+" : "")}{v}%"; }
+    private string BrightnessHudText(){ int v = (int)Math.Round(_viewModel.ColorBrightness * 200); return $"亮度  {(v >= 0 ? "+" : "")}{v}%"; }
+    private string VignetteHudText()  { return $"暗角  {(int)Math.Round(_viewModel.ColorVignette * 100)}%"; }
+    private string SkinHudText()      { int v = (int)Math.Round(_viewModel.ColorSkinTone * 100); return $"肤色  {(v >= 0 ? "+" : "")}{v}%"; }
 
     /// <summary>
     /// 检查鼠标是否在UI控件上（右侧面板、底部控制栏等，不包括进度条）
@@ -1071,7 +1140,6 @@ public partial class MainWindow : Window
             "• Tab - Toggle segment panel\n" +
             "• Left/Right Arrow - Seek backward/forward 5 seconds\n" +
             "• Up/Down Arrow - Select previous/next segment (cycle)\n" +
-            "• Mouse Wheel (video) - Adjust volume (±5%)\n" +
             "• Mouse Wheel (progress bar) - Frame step (0.5s)\n" +
             "  • + Ctrl - Fine step (0.1s)\n" +
             "  • + Shift - Coarse step (1.5s)\n" +
@@ -1079,8 +1147,15 @@ public partial class MainWindow : Window
             "• Alt + Mouse Wheel (video) - Zoom toward cursor\n" +
             "• Middle Mouse Drag - Pan when zoomed in\n" +
             "• F - Reset zoom to fit video\n" +
-            "• Click video - Play/Pause\n" +
-            "• Right-click - Menu\n\n" +
+            "• Click video - Play/Pause\n\n" +
+            "Filters (hold key + scroll):\n" +
+            "• T - Color Temperature\n" +
+            "• H - Saturation\n" +
+            "• S - Sharpness\n" +
+            "• C - Contrast\n" +
+            "• B - Brightness\n" +
+            "• V - Vignette\n" +
+            "• P - Skin Tone\n\n" +
             "Created with LibVLCSharp.",
             "About",
             MessageBoxButton.OK,
@@ -1637,4 +1712,11 @@ public partial class MainWindow : Window
     #endregion
 
     #endregion
+
+    private void MainWindow_Deactivated(object? sender, EventArgs e)
+    {
+        // 窗口失焦时清除所有滤镜按键状态，防止按键卡住
+        _isHoldingT = _isHoldingH = _isHoldingS = _isHoldingC = _isHoldingB = _isHoldingV = _isHoldingP = false;
+        HideFilterHud();
+    }
 }
