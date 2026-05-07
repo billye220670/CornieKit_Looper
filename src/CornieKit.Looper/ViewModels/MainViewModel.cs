@@ -18,6 +18,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly SegmentManager _segmentManager;
     private readonly DataPersistenceService _dataPersistence;
     private readonly RecentFilesService _recentFiles;
+    private readonly AppSettingsService _appSettings;
+
+    /// <summary>
+    /// 上次非静音时的音量，用于解除静音时恢复到此值。
+    /// </summary>
+    private int _lastNonZeroVolume = 100;
+
+    /// <summary>
+    /// 元数据脏标记：仅当用户对当前视频做过编辑操作（标片段、改滤镜、缩放等），
+    /// 或加载时已存在 .cornieloop 文件时为 true。
+    /// 关闭时仅在此值为 true 才持久化，避免"只看不编辑"时生成 .cornieloop。
+    /// </summary>
+    private bool _metadataDirty;
 
     [ObservableProperty]
     private ImageSource? _videoSource;
@@ -115,13 +128,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         set { var v = Math.Clamp(value, -1.0, 1.0); if (Math.Abs(_colorSkinTone - v) < 0.0001) return; _colorSkinTone = v; OnPropertyChanged(); }
     }
 
-    public void AdjustColorTemperature(int direction) { ColorTemperature = Math.Clamp(_colorTemperature + direction * 0.05, -1.0,  1.0); SaveMetadataAsync().ConfigureAwait(false); }
-    public void AdjustColorSaturation(int direction)  { ColorSaturation  = Math.Clamp(_colorSaturation  + direction * 0.05,  0.0,  2.0); SaveMetadataAsync().ConfigureAwait(false); }
-    public void AdjustColorSharpness(int direction)   { ColorSharpness   = Math.Clamp(_colorSharpness   + direction * 0.10,  0.0,  2.0); SaveMetadataAsync().ConfigureAwait(false); }
-    public void AdjustColorContrast(int direction)    { ColorContrast    = Math.Clamp(_colorContrast    + direction * 0.05,  0.5,  2.0); SaveMetadataAsync().ConfigureAwait(false); }
-    public void AdjustColorBrightness(int direction)  { ColorBrightness  = Math.Clamp(_colorBrightness  + direction * 0.025,-0.5,  0.5); SaveMetadataAsync().ConfigureAwait(false); }
-    public void AdjustColorVignette(int direction)    { ColorVignette    = Math.Clamp(_colorVignette    + direction * 0.05,  0.0,  1.0); SaveMetadataAsync().ConfigureAwait(false); }
-    public void AdjustColorSkinTone(int direction)    { ColorSkinTone    = Math.Clamp(_colorSkinTone    + direction * 0.05, -1.0,  1.0); SaveMetadataAsync().ConfigureAwait(false); }
+    public void AdjustColorTemperature(int direction) { ColorTemperature = Math.Clamp(_colorTemperature + direction * 0.05, -1.0,  1.0); MarkDirtyAndSave(); }
+    public void AdjustColorSaturation(int direction)  { ColorSaturation  = Math.Clamp(_colorSaturation  + direction * 0.05,  0.0,  2.0); MarkDirtyAndSave(); }
+    public void AdjustColorSharpness(int direction)   { ColorSharpness   = Math.Clamp(_colorSharpness   + direction * 0.10,  0.0,  2.0); MarkDirtyAndSave(); }
+    public void AdjustColorContrast(int direction)    { ColorContrast    = Math.Clamp(_colorContrast    + direction * 0.05,  0.5,  2.0); MarkDirtyAndSave(); }
+    public void AdjustColorBrightness(int direction)  { ColorBrightness  = Math.Clamp(_colorBrightness  + direction * 0.025,-0.5,  0.5); MarkDirtyAndSave(); }
+    public void AdjustColorVignette(int direction)    { ColorVignette    = Math.Clamp(_colorVignette    + direction * 0.05,  0.0,  1.0); MarkDirtyAndSave(); }
+    public void AdjustColorSkinTone(int direction)    { ColorSkinTone    = Math.Clamp(_colorSkinTone    + direction * 0.05, -1.0,  1.0); MarkDirtyAndSave(); }
 
     /// <summary>
     /// Fired when zoom/pan state changes. MainWindow subscribes to update Image transforms.
@@ -174,12 +187,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         VideoPlayerService videoPlayer,
         SegmentManager segmentManager,
         DataPersistenceService dataPersistence,
-        RecentFilesService recentFiles)
+        RecentFilesService recentFiles,
+        AppSettingsService appSettings)
     {
         _videoPlayer = videoPlayer;
         _segmentManager = segmentManager;
         _dataPersistence = dataPersistence;
         _recentFiles = recentFiles;
+        _appSettings = appSettings;
 
         // VideoPlayer 在 InitializeAsync() 中异步初始化，不在此处阻塞
         StatusMessage = "Initializing player...";
@@ -208,8 +223,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         };
 
-        _videoPlayer.SetVolume(100);
-        CurrentVolume = 100;
+        // 恢复上次保存的音量与静音状态（全局持久化：跨视频、跨会话）
+        var savedVolume = _appSettings.Settings.LastVolume;
+        var wasMuted = _appSettings.Settings.IsMuted;
+        _lastNonZeroVolume = savedVolume > 0 ? savedVolume : 100;
+        var initialVolume = wasMuted ? 0 : _lastNonZeroVolume;
+        _videoPlayer.SetVolume(initialVolume);
+        CurrentVolume = initialVolume;
 
         _videoPlayer.PositionChanged += OnPositionChanged;
         _videoPlayer.PlaybackStarted += (s, e) => IsPlaying = true;
@@ -266,6 +286,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             IsPlayingAllSegments = false;
             _playingSingleSegment = false;
             PlaybackPosition = 0;
+            // 新视频加载：重置脏标记；若存在 .cornieloop 则在下面重新标脏
+            _metadataDirty = false;
             ResetZoom(save: false);
 
             // 添加到最近文件
@@ -278,6 +300,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (metadata != null)
             {
+                // 已存在元数据文件：保持脏状态以便关闭时继续更新（如播放位置）
+                _metadataDirty = true;
                 _segmentManager.LoadSegments(metadata.Segments);
                 SelectedLoopMode = metadata.DefaultLoopMode;
                 StatusMessage = $"Loaded {metadata.Segments.Count} segments";
@@ -443,7 +467,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var segment = _segmentManager.AddSegment(_recordingStartTime.Value, endTime);
 
             StatusMessage = $"Segment created: {segment.Name}";
-            SaveMetadataAsync().ConfigureAwait(false);
+            MarkDirtyAndSave();
 
             // 自动开始循环播放新录制的片段
             IsPlayingAllSegments = true;  // 进入播放状态
@@ -480,7 +504,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SelectedSegment = segmentViewModel;
         UpdateSegmentMarkers();
 
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     [RelayCommand]
@@ -518,11 +542,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             IsPlayingAllSegments = false;  // 所有segment删除后停止列表播放
             await _dataPersistence.DeleteMetadataAsync(CurrentVideoPath);
+            // 清除脏标记，避免窗口关闭时重新生成 .cornieloop
+            _metadataDirty = false;
             StatusMessage = "All segments deleted. Metadata file removed.";
         }
         else
         {
-            await SaveMetadataAsync();
+            await MarkDirtyAndSaveAsync();
         }
     }
 
@@ -542,7 +568,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _segmentManager.SetCurrentSegment(null);
             UpdateSegmentPlayingState();
             UpdateSegmentMarkers();  // 隐藏标记
-            SaveMetadataAsync().ConfigureAwait(false);
+            MarkDirtyAndSave();
             return;
         }
 
@@ -557,7 +583,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SelectedSegment = Segments.First();
         UpdateSegmentMarkers();
 
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     partial void OnSelectedLoopModeChanged(LoopMode value)
@@ -568,7 +594,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _playingSingleSegment = false;
         }
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     [RelayCommand]
@@ -712,10 +738,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// 当 CurrentVolume 被任意方式修改时（包括滑块拖动），同步到 VideoPlayerService
+    /// 并持久化到全局设置（跨视频、跨会话）。
     /// </summary>
     partial void OnCurrentVolumeChanged(int value)
     {
         _videoPlayer.SetVolume(value);
+
+        // 记录非静音音量，供解除静音时恢复
+        if (value > 0)
+        {
+            _lastNonZeroVolume = value;
+        }
+
+        // 持久化当前音量与静音状态
+        _appSettings?.UpdateVolumeState(_lastNonZeroVolume, value == 0);
+    }
+
+    /// <summary>
+    /// 切换静音状态：静音 → 恢复到上次非静音音量；非静音 → 静音（记录当前音量）。
+    /// </summary>
+    public void ToggleMute()
+    {
+        if (CurrentVolume > 0)
+        {
+            _lastNonZeroVolume = CurrentVolume;
+            CurrentVolume = 0;
+        }
+        else
+        {
+            CurrentVolume = _lastNonZeroVolume > 0 ? _lastNonZeroVolume : 100;
+        }
     }
 
     /// <summary>
@@ -756,7 +808,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 playingVm.Segment.StartTime = currentTime;
                 playingVm.RefreshTimeTexts();
                 UpdateSegmentMarkers();
-                SaveMetadataAsync().ConfigureAwait(false);
+                MarkDirtyAndSave();
                 StatusMessage = $"Segment '{playingVm.Name}' start point updated.";
 
                 // 从新起始点重新开始播放
@@ -794,7 +846,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 playingVm.Segment.EndTime = currentTime;
                 playingVm.RefreshTimeTexts();
                 UpdateSegmentMarkers();
-                SaveMetadataAsync().ConfigureAwait(false);
+                MarkDirtyAndSave();
                 StatusMessage = $"Segment '{playingVm.Name}' end point updated.";
 
                 // 继续循环播放更新后的segment
@@ -836,7 +888,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 创建segment
         var segment = _segmentManager.AddSegment(startTime, endTime);
         StatusMessage = $"Segment created: {segment.Name}";
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
 
         // 自动播放新segment，进入播放状态
         IsPlayingAllSegments = true;
@@ -972,7 +1024,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         playingVm.RefreshTimeTexts();
 
         // 保存到文件
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
 
         StatusMessage = $"Segment '{playingVm.Name}' updated.";
     }
@@ -1124,18 +1176,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void OnSegmentRenamed()
     {
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     public void ReorderSegments(List<Guid> newOrder)
     {
         _segmentManager.ReorderSegments(newOrder);
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     public async Task SavePlaybackStateAsync()
     {
+        // 关闭时仅在有编辑（或加载时已存在元数据）才写入，避免"只看不编辑"生成 .cornieloop
+        if (!_metadataDirty)
+            return;
         await SaveMetadataAsync();
+    }
+
+    /// <summary>
+    /// 标记元数据已变更并异步保存（用于所有用户编辑入口）。
+    /// </summary>
+    private void MarkDirtyAndSave()
+    {
+        _metadataDirty = true;
+        SaveMetadataAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 标记元数据已变更并返回保存 Task（用于需 await 的编辑入口）。
+    /// </summary>
+    private Task MarkDirtyAndSaveAsync()
+    {
+        _metadataDirty = true;
+        return SaveMetadataAsync();
     }
 
     private async Task SaveMetadataAsync()
@@ -1214,7 +1287,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _viewCenterY = ClampCenter(newCenterY, newZoom);
 
         ZoomPanChanged?.Invoke();
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     /// <summary>
@@ -1236,7 +1309,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void SaveZoomPanState()
     {
-        SaveMetadataAsync().ConfigureAwait(false);
+        MarkDirtyAndSave();
     }
 
     /// <summary>
@@ -1248,7 +1321,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _viewCenterX = 0.5;
         _viewCenterY = 0.5;
         ZoomPanChanged?.Invoke();
-        if (save) SaveMetadataAsync().ConfigureAwait(false);
+        if (save) MarkDirtyAndSave();
     }
 
     /// <summary>

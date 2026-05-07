@@ -34,7 +34,6 @@ public partial class MainWindow : Window
     private bool _isDraggingSegment;
     private bool _isDraggingStartMarker;
     private bool _isDraggingEndMarker;
-    private int _preMuteVolume = 100;
 
     // Zoom/Pan state
     private bool _isPanning;
@@ -467,19 +466,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 音量图标按钮点击：切换静音
+    /// 音量图标按钮点击：切换静音（状态由 ViewModel 管理并持久化）
     /// </summary>
     private void VolumeIcon_Click(object sender, RoutedEventArgs e)
     {
-        if (_viewModel.CurrentVolume > 0)
-        {
-            _preMuteVolume = _viewModel.CurrentVolume;
-            _viewModel.SetVolume(0);
-        }
-        else
-        {
-            _viewModel.SetVolume(_preMuteVolume > 0 ? _preMuteVolume : 100);
-        }
+        _viewModel.ToggleMute();
         ShowVolumeHUD(_viewModel.CurrentVolume);
     }
 

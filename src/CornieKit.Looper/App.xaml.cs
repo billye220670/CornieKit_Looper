@@ -17,6 +17,7 @@ public partial class App : Application
         services.AddSingleton<SegmentManager>();
         services.AddSingleton<DataPersistenceService>();
         services.AddSingleton<RecentFilesService>();
+        services.AddSingleton<AppSettingsService>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
 
