@@ -1,5 +1,6 @@
 using CornieKit.Looper.Models;
 using CornieKit.Looper.Services;
+using CornieKit.Looper.ViewModels;
 
 namespace CornieKit.Looper.Tests;
 
@@ -62,5 +63,30 @@ public class ClosePathTests
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void EachVideoOpen_StartsMuted_AndUnmuteRestoresTheLevel()
+    {
+        var viewModel = new MainViewModel(
+            new VideoPlayerService(),
+            new SegmentManager(),
+            new DataPersistenceService(),
+            new RecentFilesService(),
+            new AppSettingsService());
+
+        viewModel.SetVolume(35);
+        viewModel.MuteForNewVideo();
+        Assert.Equal(0, viewModel.CurrentVolume);
+
+        viewModel.ToggleMute();
+        Assert.Equal(35, viewModel.CurrentVolume);
+
+        viewModel.SetVolume(60);
+        viewModel.MuteForNewVideo();
+        Assert.Equal(0, viewModel.CurrentVolume);
+
+        viewModel.ToggleMute();
+        Assert.Equal(60, viewModel.CurrentVolume);
     }
 }

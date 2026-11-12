@@ -158,7 +158,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [ObservableProperty]
-    private int _currentVolume = 100;
+    private int _currentVolume;
 
     [ObservableProperty]
     private double _pendingStartMarkerPosition;
@@ -224,13 +224,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         };
 
-        // 恢复上次保存的音量与静音状态（全局持久化：跨视频、跨会话）
+        // Remember the saved audible level for unmute. Do not apply it:
+        // every video starts muted, including the first one after launch.
         var savedVolume = _appSettings.Settings.LastVolume;
-        var wasMuted = _appSettings.Settings.IsMuted;
         _lastNonZeroVolume = savedVolume > 0 ? savedVolume : 100;
-        var initialVolume = wasMuted ? 0 : _lastNonZeroVolume;
-        _videoPlayer.SetVolume(initialVolume);
-        CurrentVolume = initialVolume;
+        _videoPlayer.PrepareMutedOpen();
+        CurrentVolume = 0;
 
         _videoPlayer.PositionChanged += OnPositionChanged;
         _videoPlayer.PlaybackStarted += (s, e) => IsPlaying = true;
@@ -259,6 +258,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task LoadVideoAsync(string filePath)
     {
+        // Before any Play(), including the duration probe inside the player.
+        // Runs for every open path (dialog, recent, drag-drop, command line).
+        MuteForNewVideo();
+
         // Cancel any previous loading operation
         _loadCancellationToken?.Cancel();
         _loadCancellationToken = new CancellationTokenSource();
@@ -753,6 +756,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 持久化当前音量与静音状态
         _appSettings?.UpdateVolumeState(_lastNonZeroVolume, value == 0);
+    }
+
+    /// <summary>
+    /// New videos start silent. The last audible level is kept so unmute restores it.
+    /// </summary>
+    internal void MuteForNewVideo()
+    {
+        if (CurrentVolume > 0)
+            _lastNonZeroVolume = CurrentVolume;
+
+        _videoPlayer.PrepareMutedOpen();
+        if (CurrentVolume != 0)
+            CurrentVolume = 0;
     }
 
     /// <summary>

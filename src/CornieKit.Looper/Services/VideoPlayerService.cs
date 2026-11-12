@@ -12,6 +12,7 @@ public class VideoPlayerService : IDisposable
     private MediaPlayer? _mediaPlayer;
     private Media? _currentMedia;
     private int _abandoned;
+    private int _startMuted;
     private System.Timers.Timer? _positionTimer;
     private LoopSegment? _activeLoopSegment;
 
@@ -71,7 +72,22 @@ public class VideoPlayerService : IDisposable
         _mediaPlayer.SetVideoFormatCallbacks(OnVideoFormatSetup, OnVideoFormatCleanup);
         _mediaPlayer.SetVideoCallbacks(OnVideoLock, null, OnVideoDisplay);
 
-        _mediaPlayer.Playing += (s, e) => PlaybackStarted?.Invoke(this, EventArgs.Empty);
+        _mediaPlayer.Playing += (s, e) =>
+        {
+            // Playing is raised on a LibVLC thread. Do not call libvlc from here.
+            // If Play() ignored the pre-play volume, re-apply mute as soon as the
+            // output exists, until the user picks a non-zero level for this video.
+            if (Volatile.Read(ref _startMuted) != 0)
+            {
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    if (Volatile.Read(ref _startMuted) != 0)
+                        ApplyVolume(0);
+                });
+            }
+
+            PlaybackStarted?.Invoke(this, EventArgs.Empty);
+        };
         _mediaPlayer.Paused += (s, e) => PlaybackPaused?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.Stopped += (s, e) => PlaybackStopped?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.EndReached += OnEndReached;
@@ -211,8 +227,15 @@ public class VideoPlayerService : IDisposable
             _currentMedia = new Media(_libVLC, filePath, FromType.FromPath);
             _mediaPlayer.Media = _currentMedia;
 
+            // The probe Play() below is the first moment this file can make sound.
+            // Mute on this thread immediately before it; LibVLC's default volume is 100.
+            PrepareMutedOpen();
+
             await Task.Run(async () =>
             {
+                if (Volatile.Read(ref _startMuted) != 0)
+                    ApplyVolume(0);
+
                 _mediaPlayer.Play();
                 var timeout = DateTime.Now.AddSeconds(10);
                 while (_mediaPlayer.Length == 0)
@@ -277,20 +300,39 @@ public class VideoPlayerService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Silence the current media before playback. A later non-zero
+    /// <see cref="SetVolume"/> clears this so in-session unmute keeps working.
+    /// </summary>
+    public void PrepareMutedOpen()
+    {
+        Volatile.Write(ref _startMuted, 1);
+        ApplyVolume(0);
+    }
+
     public void SetVolume(int volume)
     {
         var clampedVolume = Math.Clamp(volume, 0, 100);
         Console.WriteLine($"[VideoPlayerService] SetVolume called, volume={volume}, clamped={clampedVolume}");
 
-        if (_mediaPlayer != null)
-        {
-            _mediaPlayer.Volume = clampedVolume;
-            Console.WriteLine($"[VideoPlayerService] MediaPlayer.Volume set to {_mediaPlayer.Volume}");
-        }
-        else
+        // A positive level is an explicit unmute for this video.
+        if (clampedVolume > 0)
+            Volatile.Write(ref _startMuted, 0);
+
+        ApplyVolume(clampedVolume);
+    }
+
+    private void ApplyVolume(int clampedVolume)
+    {
+        if (_mediaPlayer == null)
         {
             Console.WriteLine("[VideoPlayerService] MediaPlayer is null!");
+            return;
         }
+
+        _mediaPlayer.Volume = clampedVolume;
+        _mediaPlayer.Mute = clampedVolume == 0;
+        Console.WriteLine($"[VideoPlayerService] MediaPlayer.Volume set to {_mediaPlayer.Volume}");
     }
 
     public void PlaySegment(LoopSegment segment)

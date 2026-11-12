@@ -62,6 +62,10 @@
   </Target>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="CornieKit.Looper.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="LibVLCSharp" Version="3.9.5" />
     <PackageReference Include="LibVLCSharp.WPF" Version="3.9.5" />
