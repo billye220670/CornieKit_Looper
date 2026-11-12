@@ -68,6 +68,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private const int SeekThrottleMs = 50;
     private bool _playingSingleSegment;
     private CancellationTokenSource? _loadCancellationToken;
+    private int _shutdownRequested;
     private TimeSpan? _pendingStartTime;
     private DateTime _lastMarkerSeekTime;
 
@@ -157,7 +158,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [ObservableProperty]
-    private int _currentVolume = 100;
+    private int _currentVolume;
 
     [ObservableProperty]
     private double _pendingStartMarkerPosition;
@@ -223,13 +224,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         };
 
-        // 恢复上次保存的音量与静音状态（全局持久化：跨视频、跨会话）
+        // Remember the saved audible level for unmute. Do not apply it:
+        // every video starts muted, including the first one after launch.
         var savedVolume = _appSettings.Settings.LastVolume;
-        var wasMuted = _appSettings.Settings.IsMuted;
         _lastNonZeroVolume = savedVolume > 0 ? savedVolume : 100;
-        var initialVolume = wasMuted ? 0 : _lastNonZeroVolume;
-        _videoPlayer.SetVolume(initialVolume);
-        CurrentVolume = initialVolume;
+        _videoPlayer.PrepareMutedOpen();
+        CurrentVolume = 0;
 
         _videoPlayer.PositionChanged += OnPositionChanged;
         _videoPlayer.PlaybackStarted += (s, e) => IsPlaying = true;
@@ -258,6 +258,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task LoadVideoAsync(string filePath)
     {
+        // Before any Play(), including the duration probe inside the player.
+        // Runs for every open path (dialog, recent, drag-drop, command line).
+        MuteForNewVideo();
+
         // Cancel any previous loading operation
         _loadCancellationToken?.Cancel();
         _loadCancellationToken = new CancellationTokenSource();
@@ -383,7 +387,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void RefreshRecentFiles()
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             RecentFiles.Clear();
             foreach (var filePath in _recentFiles.RecentFiles)
@@ -755,6 +759,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// New videos start silent. The last audible level is kept so unmute restores it.
+    /// </summary>
+    internal void MuteForNewVideo()
+    {
+        if (CurrentVolume > 0)
+            _lastNonZeroVolume = CurrentVolume;
+
+        _videoPlayer.PrepareMutedOpen();
+        if (CurrentVolume != 0)
+            CurrentVolume = 0;
+    }
+
+    /// <summary>
     /// 切换静音状态：静音 → 恢复到上次非静音音量；非静音 → 静音（记录当前音量）。
     /// </summary>
     public void ToggleMute()
@@ -1087,7 +1104,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnPositionChanged(object? sender, TimeSpan time)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             if (_isScrubbing)
                 return;
@@ -1116,7 +1133,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _videoPlayer.PlaySegment(nextSegment);
 
             // 必须在UI线程上更新Observable属性和标记
-            Application.Current.Dispatcher.Invoke(() =>
+            InvokeOnUi(() =>
             {
                 UpdateSegmentPlayingState();
 
@@ -1132,7 +1149,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnPlaybackEnded(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             _updatingFromVideo = true;
             PlaybackPosition = 0;
@@ -1148,7 +1165,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnSegmentsChanged(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             Segments.Clear();
             foreach (var segment in _segmentManager.Segments)
@@ -1160,7 +1177,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnCurrentSegmentChanged(object? sender, LoopSegment segment)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             UpdateSegmentPlayingState();
         });
@@ -1185,9 +1202,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MarkDirtyAndSave();
     }
 
+    /// <summary>
+    /// Writes the current playback position when metadata is already dirty.
+    /// Quit does not call this: close must not wait on disk I/O. Edits are saved
+    /// as they happen via <see cref="MarkDirtyAndSave"/>.
+    /// </summary>
     public async Task SavePlaybackStateAsync()
     {
-        // 关闭时仅在有编辑（或加载时已存在元数据）才写入，避免"只看不编辑"生成 .cornieloop
         if (!_metadataDirty)
             return;
         await SaveMetadataAsync();
@@ -1338,8 +1359,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     #endregion
 
-    public void Dispose()
+    /// <summary>
+    /// Cancels in-flight load/save work and detaches player callbacks.
+    /// Does not stop or dispose LibVLC; that join deadlocks the UI thread.
+    /// </summary>
+    public void AbandonForShutdown()
     {
+        Volatile.Write(ref _shutdownRequested, 1);
+
         try
         {
             _loadCancellationToken?.Cancel();
@@ -1349,7 +1376,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // CancellationTokenSource already disposed, ignore
         }
 
-        _loadCancellationToken?.Dispose();
-        _videoPlayer?.Dispose();
+        _videoPlayer.Abandon();
+    }
+
+    public void Dispose()
+    {
+        AbandonForShutdown();
+    }
+
+    private void InvokeOnUi(Action action)
+    {
+        if (Volatile.Read(ref _shutdownRequested) != 0 || AppShutdown.IsExitRequested)
+            return;
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.HasShutdownStarted)
+            return;
+
+        dispatcher.Invoke(action);
     }
 }

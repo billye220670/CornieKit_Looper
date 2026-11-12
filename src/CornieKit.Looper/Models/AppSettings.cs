@@ -11,7 +11,8 @@ public class AppSettings
     public int LastVolume { get; set; } = 100;
 
     /// <summary>
-    /// 上次退出时是否处于静音状态。
+    /// Last mute toggle the user made. Opening a video always starts muted and
+    /// does not consult this flag.
     /// </summary>
     public bool IsMuted { get; set; } = false;
 }
