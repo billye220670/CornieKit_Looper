@@ -66,6 +66,17 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "  ✓ Build completed" -ForegroundColor Green
 
+# The player loads Effects\VideoAdjust.ps from the exe directory at startup.
+$shaderSource = Join-Path $projectRoot "src\CornieKit.Looper\Effects\VideoAdjust.ps"
+$shaderDestDir = Join-Path $publishDir "Effects"
+if (-not (Test-Path $shaderSource)) {
+    Write-Host "Error: pixel shader not found at $shaderSource" -ForegroundColor Red
+    exit 1
+}
+New-Item -ItemType Directory -Force -Path $shaderDestDir | Out-Null
+Copy-Item -Path $shaderSource -Destination (Join-Path $shaderDestDir "VideoAdjust.ps") -Force
+Write-Host "  ✓ Copied VideoAdjust.ps" -ForegroundColor Green
+
 # Copy file association tools
 Write-Host "Copying file association tools..." -ForegroundColor Yellow
 
