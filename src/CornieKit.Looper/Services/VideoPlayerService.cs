@@ -11,7 +11,7 @@ public class VideoPlayerService : IDisposable
     private LibVLC? _libVLC;
     private MediaPlayer? _mediaPlayer;
     private Media? _currentMedia;
-    private bool _isDisposed;
+    private int _abandoned;
     private System.Timers.Timer? _positionTimer;
     private LoopSegment? _activeLoopSegment;
 
@@ -88,6 +88,12 @@ public class VideoPlayerService : IDisposable
     /// </summary>
     private uint OnVideoFormatSetup(ref IntPtr opaque, IntPtr chroma, ref uint width, ref uint height, ref uint pitches, ref uint lines)
     {
+        // Format setup runs on a LibVLC thread. Dispatcher.Invoke from here deadlocks
+        // if the UI thread is inside MediaPlayer.Stop/Dispose. On quit, fail the
+        // negotiation immediately instead of marshaling.
+        if (IsAbandoned)
+            return 0;
+
         // Request RV32 (BGRA32) format
         var chromaBytes = new byte[] { (byte)'R', (byte)'V', (byte)'3', (byte)'2' };
         Marshal.Copy(chromaBytes, 0, chroma, 4);
@@ -109,9 +115,15 @@ public class VideoPlayerService : IDisposable
         uint capturedWidth = width;
         uint capturedHeight = height;
 
+        if (IsAbandoned)
+            return 0;
+
         // Create WriteableBitmap on the UI thread
         Application.Current.Dispatcher.Invoke(() =>
         {
+            if (IsAbandoned)
+                return;
+
             _videoSource = new WriteableBitmap(
                 (int)capturedWidth, (int)capturedHeight,
                 96, 96,
@@ -136,14 +148,14 @@ public class VideoPlayerService : IDisposable
     /// </summary>
     private void OnVideoDisplay(IntPtr opaque, IntPtr picture)
     {
-        if (_videoSource == null)
+        if (IsAbandoned || _videoSource == null)
             return;
 
         Application.Current.Dispatcher.BeginInvoke(() =>
         {
             try
             {
-                if (_videoSource == null || _videoWidth == 0 || _videoHeight == 0)
+                if (IsAbandoned || _videoSource == null || _videoWidth == 0 || _videoHeight == 0)
                     return;
 
                 _videoSource.Lock();
@@ -168,6 +180,11 @@ public class VideoPlayerService : IDisposable
     /// </summary>
     private void OnVideoFormatCleanup(ref IntPtr opaque)
     {
+        // Leave the pinned buffer alive on quit. Freeing it while a display
+        // callback still reads it faults, and process exit reclaims it.
+        if (IsAbandoned)
+            return;
+
         lock (_videoLock)
         {
             if (_videoBufferHandle.IsAllocated)
@@ -290,7 +307,7 @@ public class VideoPlayerService : IDisposable
 
     private void OnPositionTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
     {
-        if (_mediaPlayer == null || !IsPlaying)
+        if (IsAbandoned || _mediaPlayer == null || !IsPlaying)
             return;
 
         var currentTime = CurrentTime;
@@ -312,8 +329,16 @@ public class VideoPlayerService : IDisposable
         // Must use ThreadPool to avoid blocking LibVLC's thread
         ThreadPool.QueueUserWorkItem(_ =>
         {
+            if (IsAbandoned)
+                return;
+
             _mediaPlayer?.Stop();
+            if (IsAbandoned)
+                return;
+
             Thread.Sleep(50); // Give LibVLC time to release resources
+            if (IsAbandoned)
+                return;
 
             // If there's an active loop segment, restart from its beginning
             if (_activeLoopSegment != null)
@@ -330,29 +355,37 @@ public class VideoPlayerService : IDisposable
         });
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Stops managed callbacks without calling LibVLC stop/release.
+    /// Those native calls join threads that may be blocked on the UI dispatcher.
+    /// </summary>
+    public void Abandon()
     {
-        if (_isDisposed)
+        if (Interlocked.Exchange(ref _abandoned, 1) != 0)
             return;
 
-        _positionTimer?.Stop();
-        _positionTimer?.Dispose();
-
-        _mediaPlayer?.Stop();
-        _currentMedia?.Dispose();
-        _mediaPlayer?.Dispose();
-        _libVLC?.Dispose();
-
-        // Clean up video buffer
-        lock (_videoLock)
+        try
         {
-            if (_videoBufferHandle.IsAllocated)
-            {
-                _videoBufferHandle.Free();
-            }
+            _positionTimer?.Stop();
+        }
+        catch
+        {
+            // Timer shutdown must not block process exit.
         }
 
-        _isDisposed = true;
+        _activeLoopSegment = null;
+    }
+
+    public void Dispose()
+    {
+        // Intentionally does not Stop/Dispose MediaPlayer or LibVLC.
+        // libvlc_media_player_stop (and release, which stops) blocks until decoder
+        // threads exit. OnVideoFormatSetup marshals with Dispatcher.Invoke, so that
+        // join deadlocks when it runs on the UI thread. Process termination reclaims
+        // the native player, the pinned frame buffer, and any in-flight decode.
+        Abandon();
         GC.SuppressFinalize(this);
     }
+
+    private bool IsAbandoned => Volatile.Read(ref _abandoned) != 0;
 }

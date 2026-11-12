@@ -49,14 +49,31 @@ public partial class App : Application
         }
     }
 
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        // Logoff / Windows shutdown uses this path instead of the title-bar button.
+        AbandonAndExit();
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
-        if (_serviceProvider is IDisposable disposable)
+        // Never dispose the DI container here. That disposes MainViewModel and
+        // VideoPlayerService on the UI thread and deadlocks inside LibVLC.
+        AbandonAndExit();
+    }
+
+    private void AbandonAndExit()
+    {
+        try
         {
-            disposable.Dispose();
+            _serviceProvider?.GetService<MainViewModel>()?.AbandonForShutdown();
+        }
+        catch
+        {
+            // Quitting must not depend on cleanup.
         }
 
-        base.OnExit(e);
+        AppShutdown.ExitImmediately();
     }
 }
 

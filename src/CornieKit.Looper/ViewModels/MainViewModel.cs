@@ -68,6 +68,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private const int SeekThrottleMs = 50;
     private bool _playingSingleSegment;
     private CancellationTokenSource? _loadCancellationToken;
+    private int _shutdownRequested;
     private TimeSpan? _pendingStartTime;
     private DateTime _lastMarkerSeekTime;
 
@@ -383,7 +384,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void RefreshRecentFiles()
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             RecentFiles.Clear();
             foreach (var filePath in _recentFiles.RecentFiles)
@@ -1087,7 +1088,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnPositionChanged(object? sender, TimeSpan time)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             if (_isScrubbing)
                 return;
@@ -1116,7 +1117,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _videoPlayer.PlaySegment(nextSegment);
 
             // 必须在UI线程上更新Observable属性和标记
-            Application.Current.Dispatcher.Invoke(() =>
+            InvokeOnUi(() =>
             {
                 UpdateSegmentPlayingState();
 
@@ -1132,7 +1133,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnPlaybackEnded(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             _updatingFromVideo = true;
             PlaybackPosition = 0;
@@ -1148,7 +1149,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnSegmentsChanged(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             Segments.Clear();
             foreach (var segment in _segmentManager.Segments)
@@ -1160,7 +1161,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnCurrentSegmentChanged(object? sender, LoopSegment segment)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             UpdateSegmentPlayingState();
         });
@@ -1185,9 +1186,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MarkDirtyAndSave();
     }
 
+    /// <summary>
+    /// Writes the current playback position when metadata is already dirty.
+    /// Quit does not call this: close must not wait on disk I/O. Edits are saved
+    /// as they happen via <see cref="MarkDirtyAndSave"/>.
+    /// </summary>
     public async Task SavePlaybackStateAsync()
     {
-        // 关闭时仅在有编辑（或加载时已存在元数据）才写入，避免"只看不编辑"生成 .cornieloop
         if (!_metadataDirty)
             return;
         await SaveMetadataAsync();
@@ -1338,8 +1343,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     #endregion
 
-    public void Dispose()
+    /// <summary>
+    /// Cancels in-flight load/save work and detaches player callbacks.
+    /// Does not stop or dispose LibVLC; that join deadlocks the UI thread.
+    /// </summary>
+    public void AbandonForShutdown()
     {
+        Volatile.Write(ref _shutdownRequested, 1);
+
         try
         {
             _loadCancellationToken?.Cancel();
@@ -1349,7 +1360,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // CancellationTokenSource already disposed, ignore
         }
 
-        _loadCancellationToken?.Dispose();
-        _videoPlayer?.Dispose();
+        _videoPlayer.Abandon();
+    }
+
+    public void Dispose()
+    {
+        AbandonForShutdown();
+    }
+
+    private void InvokeOnUi(Action action)
+    {
+        if (Volatile.Read(ref _shutdownRequested) != 0 || AppShutdown.IsExitRequested)
+            return;
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.HasShutdownStarted)
+            return;
+
+        dispatcher.Invoke(action);
     }
 }

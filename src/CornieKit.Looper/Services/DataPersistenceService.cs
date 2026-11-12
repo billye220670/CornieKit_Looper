@@ -13,6 +13,8 @@ public class DataPersistenceService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    private readonly SemaphoreSlim _saveLock = new(1, 1);
+
     public string GetMetadataFilePath(string videoFilePath)
     {
         return videoFilePath + ".cornieloop";
@@ -45,19 +47,41 @@ public class DataPersistenceService
 
     public async Task SaveMetadataAsync(VideoMetadata metadata)
     {
+        await _saveLock.WaitAsync();
+        var metadataPath = GetMetadataFilePath(metadata.VideoFilePath);
+        var tempPath = metadataPath + ".tmp";
+
         try
         {
             metadata.LastModified = DateTime.Now;
             metadata.VideoFileHash = ComputeFileHash(metadata.VideoFilePath);
 
-            var metadataPath = GetMetadataFilePath(metadata.VideoFilePath);
             var json = JsonSerializer.Serialize(metadata, _jsonOptions);
-            await File.WriteAllTextAsync(metadataPath, json);
+
+            // Write a temp file and replace. Quit kills the process without waiting
+            // for in-flight saves; a direct write torn by that kill would corrupt
+            // the .cornieloop file. The previous file stays intact until replace.
+            await File.WriteAllTextAsync(tempPath, json);
+            File.Move(tempPath, metadataPath, overwrite: true);
         }
         catch (Exception ex)
         {
+            try
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+            catch
+            {
+                // Best-effort. A leftover .tmp is ignored on the next save.
+            }
+
             Console.WriteLine($"Failed to save metadata: {ex.Message}");
             throw;
+        }
+        finally
+        {
+            _saveLock.Release();
         }
     }
 
