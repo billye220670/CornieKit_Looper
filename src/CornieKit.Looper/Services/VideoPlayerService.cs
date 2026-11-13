@@ -17,6 +17,7 @@ public class VideoPlayerService : IDisposable
 
     // WriteableBitmap offscreen rendering
     private IntPtr _videoBuffer;
+    private volatile byte[]? _frameBytes;
     private GCHandle _videoBufferHandle;
     private uint _videoWidth, _videoHeight, _videoPitch;
     private WriteableBitmap? _videoSource;
@@ -95,15 +96,22 @@ public class VideoPlayerService : IDisposable
         pitches = width * 4;
         lines = height;
 
-        _videoWidth = width;
-        _videoHeight = height;
-        _videoPitch = pitches;
-
         // Allocate pinned buffer for VLC to decode into
         var bufferSize = pitches * lines;
         var buffer = new byte[bufferSize];
-        _videoBufferHandle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-        _videoBuffer = _videoBufferHandle.AddrOfPinnedObject();
+        var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        lock (_videoLock)
+        {
+            if (_videoBufferHandle.IsAllocated)
+                _videoBufferHandle.Free();
+
+            _videoWidth = width;
+            _videoHeight = height;
+            _videoPitch = pitches;
+            _frameBytes = buffer;
+            _videoBufferHandle = handle;
+            _videoBuffer = handle.AddrOfPinnedObject();
+        }
 
         // Copy ref params to locals before capturing in lambda (CS1628)
         uint capturedWidth = width;
@@ -143,15 +151,32 @@ public class VideoPlayerService : IDisposable
         {
             try
             {
-                if (_videoSource == null || _videoWidth == 0 || _videoHeight == 0)
+                byte[]? frame;
+                IntPtr buffer;
+                int width, height, pitch;
+                lock (_videoLock)
+                {
+                    frame = _frameBytes;
+                    buffer = _videoBuffer;
+                    width = (int)_videoWidth;
+                    height = (int)_videoHeight;
+                    pitch = (int)_videoPitch;
+                }
+
+                if (_videoSource == null || frame == null || buffer == IntPtr.Zero || width == 0 || height == 0)
                     return;
+
+                // RV32 leaves alpha at 0. Stamp 255 before the upload so the
+                // bitmap the shader samples is an opaque frame, not a
+                // transparent layer that composites as a second image.
+                BgraFrameAlpha.ForceOpaque(frame);
 
                 _videoSource.Lock();
                 _videoSource.WritePixels(
-                    new Int32Rect(0, 0, (int)_videoWidth, (int)_videoHeight),
-                    _videoBuffer,
-                    (int)(_videoPitch * _videoHeight),
-                    (int)_videoPitch);
+                    new Int32Rect(0, 0, width, height),
+                    buffer,
+                    pitch * height,
+                    pitch);
                 _videoSource.Unlock();
 
                 FrameRendered?.Invoke(this, EventArgs.Empty);
@@ -175,6 +200,7 @@ public class VideoPlayerService : IDisposable
                 _videoBufferHandle.Free();
             }
             _videoBuffer = IntPtr.Zero;
+            _frameBytes = null;
             _videoWidth = 0;
             _videoHeight = 0;
             _videoPitch = 0;
@@ -346,6 +372,7 @@ public class VideoPlayerService : IDisposable
         // Clean up video buffer
         lock (_videoLock)
         {
+            _frameBytes = null;
             if (_videoBufferHandle.IsAllocated)
             {
                 _videoBufferHandle.Free();
