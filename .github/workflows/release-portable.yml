@@ -93,7 +93,7 @@ jobs:
           Requires 64-bit Windows 10 or Windows 11.
 
           ### Changes
-          - **High frame rate loops.** While a segment repeats, the app builds a 2x RIFE smooth version in the background and keeps playing the original frames until it is ready. The smooth version is decoded ahead into memory and drawn on its own timer at the higher frame rate, then remembered after you quit. A lightning mark appears on that segment. Needs a DirectX 12 GPU. Without one, playback stays on the original frames.
+          - **High frame rate loops.** While a segment repeats, the app builds a 2x RIFE smooth version in the background and keeps playing the original frames until it is ready. The smooth version is decoded ahead into memory and drawn on its own timer at the higher frame rate, then remembered after you quit. A lightning mark appears on that segment when the loop is ready. Needs a DirectX 12 GPU. Without one, playback stays on the original frames.
           - **Clear invalid cache.** The top-left menu item 清除无效缓存 deletes smooth-loop caches whose video file is gone.
           - **Picture adjustments no longer ghost.** Sharpen, color temperature, and the other color controls no longer leave a double image or trail.
           - **Instant close.** Clicking the window X, Alt+F4, or Exit closes the app immediately.
@@ -104,4 +104,4 @@ jobs:
           "@
           $notes = $notes -replace "(?m)^          ", ""
           Set-Content -Path release-notes.md -Value $notes.Trim() -Encoding utf8
-          gh release create $tag $zip --title "$tag - Full frame rate smooth loops" --notes-file release-notes.md
+          gh release create $tag $zip --title "$tag - Smooth loops show the lightning mark again" --notes-file release-notes.md

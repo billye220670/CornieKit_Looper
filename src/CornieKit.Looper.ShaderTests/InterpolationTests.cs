@@ -172,12 +172,14 @@ public class InterpolationTests
     }
 
     [Fact]
-    public void Sparse_capture_is_rejected_and_a_near_full_capture_is_kept()
+    public void Collector_keeps_frames_when_the_clock_barely_moves()
     {
-        var duration = TimeSpan.FromSeconds(1);
-        Assert.False(InterpolationMath.CaptureCoversSourceRate(18, duration, 30));
-        Assert.True(InterpolationMath.CaptureCoversSourceRate(24, duration, 30));
-        Assert.True(InterpolationMath.CaptureCoversSourceRate(60, duration, 30));
+        var collector = new SegmentFrameCollector();
+        collector.Reset(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
+        Assert.False(collector.Add(TimeSpan.FromSeconds(1.000), new byte[] { 1 }, 4, 4));
+        Assert.False(collector.Add(TimeSpan.FromSeconds(1.001), new byte[] { 2 }, 4, 4));
+        Assert.False(collector.Add(TimeSpan.FromSeconds(1.001), new byte[] { 3 }, 4, 4));
+        Assert.Equal(3, collector.Count);
     }
 
     [Fact]

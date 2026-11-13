@@ -27,22 +27,6 @@ public static class InterpolationMath
         duration > TimeSpan.Zero && duration <= MaxSegmentDuration;
 
     /// <summary>
-    /// A pass that kept less than about three quarters of the source frames
-    /// would play back as a lower frame rate than the original video.
-    /// </summary>
-    public static bool CaptureCoversSourceRate(int sourceFrames, TimeSpan duration, double sourceFps)
-    {
-        if (sourceFrames < 2 || duration <= TimeSpan.Zero)
-            return false;
-        if (sourceFps < 1 || sourceFps > 240)
-            sourceFps = 30;
-        var expected = duration.TotalSeconds * sourceFps;
-        if (expected < 2)
-            return true;
-        return sourceFrames >= expected * 0.75;
-    }
-
-    /// <summary>
     /// 2x sequence: source, midpoint, source, midpoint, … and the last midpoint
     /// is between the last source frame and the first so the loop can wrap.
     /// </summary>

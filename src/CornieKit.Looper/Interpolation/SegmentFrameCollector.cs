@@ -66,11 +66,8 @@ public sealed class SegmentFrameCollector
                 _sawStart = false;
             }
 
-            // LibVLC can deliver the same picture twice. Real frames at 120 fps
-            // are still ~8 ms apart, so only true duplicates are dropped.
-            if (_frames.Count > 0 && time - _lastTime < TimeSpan.FromMilliseconds(2))
-                return false;
-
+            // LibVLC's clock often repeats a timestamp for several real frames.
+            // Dropping those made the pass look short and the loop was discarded.
             if (time <= Start + slack)
                 _sawStart = true;
             _frames.Add(encoded);

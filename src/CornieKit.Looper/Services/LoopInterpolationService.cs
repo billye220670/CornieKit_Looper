@@ -32,7 +32,6 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private readonly LoopPlaybackClock _clock = new();
     private byte[]? _decodeScratch;
     private byte[]? _jpegScratch;
-    private int _thinPasses;
     private int _frameWidth;
     private int _frameHeight;
     private int _frameCount;
@@ -204,13 +203,6 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     {
         if (!_store.TryOpen(videoPath, hash, segment.StartTime, segment.EndTime, _codec.Id, out var reader) || reader == null)
             return false;
-        var duration = segment.EndTime - segment.StartTime;
-        var sourceFrames = reader.Manifest.FrameCount / Math.Max(1, reader.Manifest.Scale);
-        if (!InterpolationMath.CaptureCoversSourceRate(sourceFrames, duration, reader.Manifest.SourceFps))
-        {
-            reader.Dispose();
-            return false;
-        }
         lock (_gate)
         {
             _reader?.Dispose();
@@ -248,7 +240,6 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _start = segment.StartTime;
             _end = segment.EndTime;
             _fps = fps is >= 1 and <= 240 ? fps : 30;
-            _thinPasses = 0;
             _phase = Phase.Capturing;
             _wantsCapture = true;
             _collector.Reset(_start, _end);
@@ -314,33 +305,6 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 start = _start;
                 end = _end;
                 fps = _fps;
-            }
-
-            if (!InterpolationMath.CaptureCoversSourceRate(sources.Length, end - start, fps))
-            {
-                var giveUp = false;
-                lock (_gate)
-                {
-                    if (generation != _generation)
-                        continue;
-                    _thinPasses++;
-                    giveUp = _thinPasses >= 2;
-                    if (giveUp)
-                    {
-                        _phase = Phase.Failed;
-                        _wantsCapture = false;
-                    }
-                    else
-                    {
-                        _phase = Phase.Capturing;
-                        _wantsCapture = true;
-                        _collector.Reset(start, end);
-                        _captureDone = NewTcs();
-                    }
-                }
-                if (giveUp)
-                    Status?.Invoke("This loop stays at the original frame rate.");
-                continue;
             }
 
             lock (_gate)
@@ -445,10 +409,17 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         {
             await foreach (var frame in _incoming.Reader.ReadAllAsync(token))
             {
-                var encoded = _codec.Encode(frame.Bgra, frame.Width, frame.Height, frame.Width * 4);
-                var complete = _collector.Add(frame.Time, encoded, frame.Width, frame.Height);
-                if (complete)
-                    TryFinishCapture();
+                try
+                {
+                    var encoded = _codec.Encode(frame.Bgra, frame.Width, frame.Height, frame.Width * 4);
+                    var complete = _collector.Add(frame.Time, encoded, frame.Width, frame.Height);
+                    if (complete)
+                        TryFinishCapture();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Console.WriteLine($"[Interpolation] Skipped a captured frame: {ex.Message}");
+                }
             }
         }
         catch (OperationCanceledException)
@@ -459,14 +430,17 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
     private void TryFinishCapture()
     {
+        TaskCompletionSource done;
         lock (_gate)
         {
             if (_phase != Phase.Capturing)
                 return;
             if (!_collector.IsComplete && !_collector.TryFreeze())
                 return;
+            done = _captureDone;
+            _captureDone = NewTcs();
         }
-        _captureDone.TrySetResult();
+        done.TrySetResult();
     }
 
     private void Fail(Guid segmentId, string message)
