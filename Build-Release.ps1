@@ -77,6 +77,16 @@ New-Item -ItemType Directory -Force -Path $shaderDestDir | Out-Null
 Copy-Item -Path $shaderSource -Destination (Join-Path $shaderDestDir "VideoAdjust.ps") -Force
 Write-Host "  ✓ Copied VideoAdjust.ps" -ForegroundColor Green
 
+$modelSource = Join-Path $projectRoot "src\CornieKit.Looper\Models\rife_v425lite.onnx"
+if (Test-Path $modelSource) {
+    $modelDestDir = Join-Path $publishDir "Models"
+    New-Item -ItemType Directory -Force -Path $modelDestDir | Out-Null
+    Copy-Item -Path $modelSource -Destination (Join-Path $modelDestDir "rife_v425lite.onnx") -Force
+    Write-Host "  ✓ Copied rife_v425lite.onnx" -ForegroundColor Green
+} else {
+    Write-Host "  ! RIFE model missing. High frame rate loops will stay on the original frames." -ForegroundColor Yellow
+}
+
 # Copy file association tools
 Write-Host "Copying file association tools..." -ForegroundColor Yellow
 

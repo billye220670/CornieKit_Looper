@@ -22,6 +22,10 @@
        The WPF project compiles the same file into the app. -->
   <ItemGroup>
     <Compile Include="..\CornieKit.Looper\Services\BgraFrameAlpha.cs" Link="BgraFrameAlpha.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\InterpolationMath.cs" Link="InterpolationMath.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\VideoFingerprint.cs" Link="VideoFingerprint.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\SegmentFrameCollector.cs" Link="SegmentFrameCollector.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\InterpolationCacheStore.cs" Link="InterpolationCacheStore.cs" />
   </ItemGroup>
 
 </Project>

@@ -20,6 +20,17 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Download RIFE model
+        shell: pwsh
+        run: |
+          $dest = "src/CornieKit.Looper/Models/rife_v425lite.onnx"
+          New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+          Invoke-WebRequest -Uri "https://huggingface.co/t9749/rife-4.25-lite-onnx/resolve/main/rife_v425lite.onnx" -OutFile $dest
+          $hash = (Get-FileHash $dest -Algorithm SHA256).Hash
+          if ($hash -ne "702802D0862AB78F2D72133C6BC3768E7E89B81756F7CD51D1055A2FE3D06577") {
+            throw "RIFE model hash mismatch: $hash"
+          }
+
       - name: Confirm fxc.exe is available
         shell: pwsh
         run: |
@@ -50,7 +61,8 @@ jobs:
             "publish\coreclr.dll",
             "publish\libvlc\win-x64\libvlc.dll",
             "publish\libvlc\win-x64\libvlccore.dll",
-            "publish\Effects\VideoAdjust.ps"
+            "publish\Effects\VideoAdjust.ps",
+            "publish\Models\rife_v425lite.onnx"
           )) {
             if (-not (Test-Path $required)) { throw "Missing $required" }
           }
@@ -80,13 +92,15 @@ jobs:
           Requires 64-bit Windows 10 or Windows 11.
 
           ### Changes
-          - **Picture adjustments no longer ghost.** Sharpen, color temperature, and the other color controls no longer leave a double image or trail. Turning an adjustment off leaves the picture unchanged.
-          - **Instant close.** Clicking the window X, Alt+F4, or Exit closes the app immediately instead of sometimes hanging as Not Responding.
-          - **Starts muted.** Every video opens muted, including the next file after you unmute. Mute, unmute, and the volume controls still work on the video that is open. Unmute restores your last audible level.
+          - **High frame rate loops.** While a segment repeats, the app builds a 2x RIFE smooth version in the background and keeps playing the original frames until it is ready. The smooth version then starts on the next repeat, is remembered after you quit, and shows a lightning mark on that segment. Needs a DirectX 12 GPU. Without one, playback stays on the original frames.
+          - **Clear invalid cache.** The top-left menu item 清除无效缓存 deletes smooth-loop caches whose video file is gone.
+          - **Picture adjustments no longer ghost.** Sharpen, color temperature, and the other color controls no longer leave a double image or trail.
+          - **Instant close.** Clicking the window X, Alt+F4, or Exit closes the app immediately.
+          - **Starts muted.** Every video opens muted. Unmute restores your last audible level.
 
           ### Run
           Extract the zip and run ``CornieKit.Looper.exe``. There is no MSI, setup.exe, or other installer.
           "@
           $notes = $notes -replace "(?m)^          ", ""
           Set-Content -Path release-notes.md -Value $notes.Trim() -Encoding utf8
-          gh release create $tag $zip --title "$tag - Ghosting fix, instant close, and default mute" --notes-file release-notes.md
+          gh release create $tag $zip --title "$tag - Smooth loops, ghosting fix, instant close, and default mute" --notes-file release-notes.md

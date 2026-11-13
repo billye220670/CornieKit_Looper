@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using LibVLCSharp.Shared;
+using CornieKit.Looper.Interpolation;
 using CornieKit.Looper.Models;
 
 namespace CornieKit.Looper.Services;
@@ -23,6 +26,32 @@ public class VideoPlayerService : IDisposable
     private uint _videoWidth, _videoHeight, _videoPitch;
     private WriteableBitmap? _videoSource;
     private readonly object _videoLock = new();
+    private IInterpolatedFrameBridge? _frameBridge;
+    private DispatcherTimer? _presentTimer;
+    private byte[]? _presentScratch;
+    private TimeSpan _syncMedia;
+    private long _syncStamp = Stopwatch.GetTimestamp();
+    private double _sourceFrameRate = 30;
+
+    public IInterpolatedFrameBridge? FrameBridge
+    {
+        get => _frameBridge;
+        set => _frameBridge = value;
+    }
+
+    public double SourceFrameRate => _sourceFrameRate;
+
+    public TimeSpan SmoothedMediaTime
+    {
+        get
+        {
+            if (_mediaPlayer?.IsPlaying != true)
+                return _syncMedia;
+            return _syncMedia + Stopwatch.GetElapsedTime(_syncStamp);
+        }
+    }
+
+    public event EventHandler<LoopSegment>? SegmentPlaybackStarted;
 
     public MediaPlayer? MediaPlayer => _mediaPlayer;
     public bool IsPlaying => _mediaPlayer?.IsPlaying ?? false;
@@ -174,6 +203,22 @@ public class VideoPlayerService : IDisposable
         if (IsAbandoned || _videoSource == null)
             return;
 
+        var bridge = _frameBridge;
+        if (bridge?.WantsCapture == true && _videoBuffer != IntPtr.Zero && _videoWidth > 0 && _videoHeight > 0)
+        {
+            try
+            {
+                var bytes = (int)(_videoPitch * _videoHeight);
+                var copy = new byte[bytes];
+                Marshal.Copy(_videoBuffer, copy, 0, bytes);
+                bridge.CaptureFrame(copy, (int)_videoWidth, (int)_videoHeight, (int)_videoPitch, CurrentTime);
+            }
+            catch
+            {
+                // A format change can retire the buffer between the check and the copy.
+            }
+        }
+
         Application.Current.Dispatcher.BeginInvoke(() =>
         {
             try
@@ -194,6 +239,9 @@ public class VideoPlayerService : IDisposable
                 }
 
                 if (_videoSource == null || frame == null || buffer == IntPtr.Zero || width == 0 || height == 0)
+                    return;
+
+                if (_frameBridge?.IsPresenting == true)
                     return;
 
                 // RV32 leaves alpha at 0. Stamp 255 before the upload so the
@@ -275,12 +323,73 @@ public class VideoPlayerService : IDisposable
                 _mediaPlayer.Pause();
             });
 
+            RememberFrameRate();
             return true;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to load video: {ex.Message}");
             return false;
+        }
+    }
+
+    public void StartPresentationClock()
+    {
+        if (_presentTimer != null)
+            return;
+        _presentTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(8) };
+        _presentTimer.Tick += (_, _) => BlitPresentedFrame();
+        _presentTimer.Start();
+    }
+
+    private void RememberFrameRate()
+    {
+        try
+        {
+            if (_currentMedia == null)
+                return;
+            foreach (var track in _currentMedia.Tracks)
+            {
+                if (track.TrackType != TrackType.Video)
+                    continue;
+                var video = track.Data.Video;
+                if (video.FrameRateDen == 0 || video.FrameRateNum == 0)
+                    continue;
+                var fps = video.FrameRateNum / (double)video.FrameRateDen;
+                if (fps is >= 1 and <= 240)
+                    _sourceFrameRate = fps;
+                return;
+            }
+        }
+        catch
+        {
+            // Keep the previous estimate. Capture still works without an exact rate.
+        }
+    }
+
+    private void BlitPresentedFrame()
+    {
+        var bridge = _frameBridge;
+        if (IsAbandoned || bridge?.IsPresenting != true || _videoSource == null)
+            return;
+        var needed = _videoSource.PixelWidth * _videoSource.PixelHeight * 4;
+        if (needed <= 0)
+            return;
+        if (_presentScratch == null || _presentScratch.Length < needed)
+            _presentScratch = new byte[needed];
+        if (!bridge.TryCopyPresentedFrame(_presentScratch, out var width, out var height))
+            return;
+        if (width != _videoSource.PixelWidth || height != _videoSource.PixelHeight)
+            return;
+        try
+        {
+            _videoSource.Lock();
+            _videoSource.WritePixels(new Int32Rect(0, 0, width, height), _presentScratch, width * 4, 0);
+            _videoSource.Unlock();
+        }
+        catch
+        {
+            // The bitmap can be replaced while a frame is being drawn.
         }
     }
 
@@ -366,6 +475,7 @@ public class VideoPlayerService : IDisposable
     public void PlaySegment(LoopSegment segment)
     {
         _activeLoopSegment = segment;
+        SegmentPlaybackStarted?.Invoke(this, segment);
         Seek(segment.StartTime);
         Play();
     }
@@ -381,6 +491,8 @@ public class VideoPlayerService : IDisposable
             return;
 
         var currentTime = CurrentTime;
+        _syncMedia = currentTime;
+        _syncStamp = Stopwatch.GetTimestamp();
         PositionChanged?.Invoke(this, currentTime);
 
         if (_activeLoopSegment != null && currentTime >= _activeLoopSegment.EndTime)

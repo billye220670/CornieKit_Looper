@@ -721,13 +721,24 @@
 
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                             <Grid>
-                                                <TextBlock Text="{Binding Name}"
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Viewbox Grid.Column="0" Width="12" Height="14" Margin="0,0,6,0"
+                                                         VerticalAlignment="Center"
+                                                         ToolTip="高帧率循环"
+                                                         Visibility="{Binding HasSmoothCache, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                    <Path Fill="#F5C542" Data="M7,0 L2,8 L6,8 L3,16 L12,6 L7,6 Z"/>
+                                                </Viewbox>
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}"
                                                            Foreground="White"
                                                            FontWeight="Medium"
                                                            FontSize="14"
                                                            MouseLeftButtonDown="SegmentName_MouseLeftButtonDown"
                                                            Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
                                                 <TextBox x:Name="RenameTextBox"
+                                                         Grid.Column="1"
                                                          Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                          FontWeight="Medium"
                                                          FontSize="14"
@@ -820,13 +831,32 @@
                                 Padding="12,0">
                             <TextBlock Text="清空历史" Foreground="#888888" FontSize="12"/>
                         </Button>
+                        <Button Style="{StaticResource MenuItemButton}"
+                                Command="{Binding ClearInvalidInterpolationCacheCommand}"
+                                Click="MenuPopup_ItemClick"
+                                Height="36"
+                                Width="280"
+                                HorizontalContentAlignment="Left"
+                                Padding="12,0">
+                            <TextBlock Text="清除无效缓存" Foreground="#888888" FontSize="12"/>
+                        </Button>
                     </StackPanel>
                     <!-- 无历史记录时显示提示 -->
-                    <TextBlock Text="No recent files"
-                               Foreground="#888888"
-                               FontSize="12"
-                               Padding="16,12"
-                               Visibility="{Binding HasRecentFiles, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                    <StackPanel Visibility="{Binding HasRecentFiles, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                        <TextBlock Text="No recent files"
+                                   Foreground="#888888"
+                                   FontSize="12"
+                                   Padding="16,12"/>
+                        <Button Style="{StaticResource MenuItemButton}"
+                                Command="{Binding ClearInvalidInterpolationCacheCommand}"
+                                Click="MenuPopup_ItemClick"
+                                Height="36"
+                                Width="280"
+                                HorizontalContentAlignment="Left"
+                                Padding="12,0">
+                            <TextBlock Text="清除无效缓存" Foreground="#888888" FontSize="12"/>
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
         </Popup>

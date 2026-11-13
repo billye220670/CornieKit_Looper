@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>favicon.ico</ApplicationIcon>
 
-    <Version>1.5.1</Version>
-    <AssemblyVersion>1.5.1.0</AssemblyVersion>
-    <FileVersion>1.5.1.0</FileVersion>
+    <Version>1.5.2</Version>
+    <AssemblyVersion>1.5.2.0</AssemblyVersion>
+    <FileVersion>1.5.2.0</FileVersion>
     <Company>CornieKit</Company>
     <Product>CornieKit Looper</Product>
     <Description>Video Segment Loop Player - Mark and loop video segments with ease</Description>
@@ -24,6 +24,11 @@
          matches the file that publish must copy next to the exe. -->
     <Content Include="Effects\VideoAdjust.ps"
              Condition="Exists('$(MSBuildThisFileDirectory)Effects\VideoAdjust.ps')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Models\rife_v425lite.onnx"
+             Condition="Exists('$(MSBuildThisFileDirectory)Models\rife_v425lite.onnx')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
@@ -83,6 +88,7 @@
     <PackageReference Include="LibVLCSharp.WPF" Version="3.9.5" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.22.1" />
   </ItemGroup>
 
 </Project>

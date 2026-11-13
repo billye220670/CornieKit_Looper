@@ -17,6 +17,9 @@ public partial class LoopSegmentViewModel : ObservableObject
     [ObservableProperty]
     private bool _isEditing;
 
+    [ObservableProperty]
+    private bool _hasSmoothCache;
+
     public Guid Id => _segment.Id;
     public string Name
     {

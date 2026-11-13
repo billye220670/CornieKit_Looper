@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Input;
@@ -19,6 +20,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DataPersistenceService _dataPersistence;
     private readonly RecentFilesService _recentFiles;
     private readonly AppSettingsService _appSettings;
+    private readonly LoopInterpolationService _loops;
 
     /// <summary>
     /// 上次非静音时的音量，用于解除静音时恢复到此值。
@@ -196,6 +198,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _dataPersistence = dataPersistence;
         _recentFiles = recentFiles;
         _appSettings = appSettings;
+        _loops = new LoopInterpolationService(
+            new Interpolation.InterpolationCacheStore(Interpolation.InterpolationCacheStore.DefaultRoot),
+            new WpfJpegFrameCodec(),
+            new RifeFrameInterpolator());
+        _loops.MediaTime = () => _videoPlayer.SmoothedMediaTime;
+        _loops.Status += message => InvokeOnUi(() => StatusMessage = message);
+        _loops.SegmentReady += (id, ready) => InvokeOnUi(() =>
+        {
+            var vm = Segments.FirstOrDefault(s => s.Id == id);
+            if (vm != null)
+                vm.HasSmoothCache = ready;
+        });
+        _videoPlayer.FrameBridge = _loops;
+        _videoPlayer.SegmentPlaybackStarted += (_, segment) =>
+        {
+            if (Volatile.Read(ref _shutdownRequested) != 0 || string.IsNullOrEmpty(CurrentVideoPath))
+                return;
+            _loops.Watch(segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
+        };
 
         // VideoPlayer 在 InitializeAsync() 中异步初始化，不在此处阻塞
         StatusMessage = "Initializing player...";
@@ -214,6 +235,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public async Task InitializeAsync()
     {
         await Task.Run(() => _videoPlayer.Initialize());
+        _videoPlayer.StartPresentationClock();
 
         // Subscribe to frame rendering for VideoSource updates
         _videoPlayer.FrameRendered += (s, e) =>
@@ -261,6 +283,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Before any Play(), including the duration probe inside the player.
         // Runs for every open path (dialog, recent, drag-drop, command line).
         MuteForNewVideo();
+        _loops.Reset();
 
         // Cancel any previous loading operation
         _loadCancellationToken?.Cancel();
@@ -1039,6 +1062,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 刷新UI显示的时间文本
         playingVm.RefreshTimeTexts();
+        playingVm.HasSmoothCache = false;
+        _loops.Watch(playingVm.Segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
 
         // 保存到文件
         MarkDirtyAndSave();
@@ -1124,7 +1149,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         // 单片段循环模式：VideoPlayerService 已自动 seek 回起点，不切换片段
         if (_playingSingleSegment)
+        {
+            _loops.OnLoopBoundary();
             return;
+        }
 
         var nextSegment = _segmentManager.GetNextSegment();
         if (nextSegment != null && nextSegment != _segmentManager.CurrentSegment)
@@ -1172,7 +1200,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 Segments.Add(new LoopSegmentViewModel(segment));
             }
+            RefreshSmoothIcons();
         });
+    }
+
+    private void RefreshSmoothIcons()
+    {
+        if (string.IsNullOrEmpty(CurrentVideoPath) || !File.Exists(CurrentVideoPath))
+            return;
+        foreach (var segmentVm in Segments)
+            segmentVm.HasSmoothCache = _loops.HasReadyCache(CurrentVideoPath, segmentVm.StartTime, segmentVm.EndTime);
+    }
+
+    [RelayCommand]
+    private void ClearInvalidInterpolationCache()
+    {
+        var removed = _loops.ClearMissingCaches();
+        StatusMessage = removed == 0
+            ? "没有无效的插帧缓存"
+            : $"已清除 {removed} 个无效插帧缓存";
     }
 
     private void OnCurrentSegmentChanged(object? sender, LoopSegment segment)
@@ -1376,6 +1422,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // CancellationTokenSource already disposed, ignore
         }
 
+        _loops.Reset();
         _videoPlayer.Abandon();
     }
 
