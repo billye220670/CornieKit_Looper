@@ -46,13 +46,18 @@ jobs:
           if (-not (Test-Path $zip)) { throw "Missing $zip" }
           foreach ($required in @(
             "publish\CornieKit.Looper.exe",
+            "publish\hostfxr.dll",
+            "publish\coreclr.dll",
             "publish\libvlc\win-x64\libvlc.dll",
             "publish\libvlc\win-x64\libvlccore.dll",
             "publish\Effects\VideoAdjust.ps"
           )) {
             if (-not (Test-Path $required)) { throw "Missing $required" }
           }
-          Get-Item $zip, publish\CornieKit.Looper.exe | Format-List FullName, Length
+          $shaderText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("publish\Effects\VideoAdjust.ps"))
+          if ($shaderText -notmatch "TexelDelta") { throw "VideoAdjust.ps was not recompiled from VideoAdjust.fx (missing TexelDelta)." }
+          if ($shaderText -match "DdyUV") { throw "VideoAdjust.ps still references DdyUV. fxc did not replace the patched shader." }
+          Get-Item $zip, publish\CornieKit.Looper.exe, publish\Effects\VideoAdjust.ps | Format-List FullName, Length
 
       - name: Publish GitHub Release
         shell: pwsh
@@ -75,8 +80,7 @@ jobs:
           Requires 64-bit Windows 10 or Windows 11.
 
           ### Changes
-          Tags v1.2.0, v1.3.0, and v1.4.0 already existed without a published zip, so this downloadable build is **v1.5.0**. It includes the current app, plus:
-
+          - **Picture adjustments no longer ghost.** Sharpen, color temperature, and the other color controls no longer leave a double image or trail. Turning an adjustment off leaves the picture unchanged.
           - **Instant close.** Clicking the window X, Alt+F4, or Exit closes the app immediately instead of sometimes hanging as Not Responding.
           - **Starts muted.** Every video opens muted, including the next file after you unmute. Mute, unmute, and the volume controls still work on the video that is open. Unmute restores your last audible level.
 
@@ -85,4 +89,4 @@ jobs:
           "@
           $notes = $notes -replace "(?m)^          ", ""
           Set-Content -Path release-notes.md -Value $notes.Trim() -Encoding utf8
-          gh release create $tag $zip --title "$tag - Instant close and default mute" --notes-file release-notes.md
+          gh release create $tag $zip --title "$tag - Ghosting fix, instant close, and default mute" --notes-file release-notes.md
