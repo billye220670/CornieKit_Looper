@@ -9,7 +9,6 @@ public static class InterpolationMath
     public const string ModelId = "rife-4.25-lite";
     public const int Scale = 2;
     public const int PadMultiple = 64;
-    public const int MaxLongSide = 1920;
     public static readonly TimeSpan MaxSegmentDuration = TimeSpan.FromSeconds(120);
 
     public static int Pad(int value)
@@ -20,8 +19,12 @@ public static class InterpolationMath
         return remainder == 0 ? value : value + (PadMultiple - remainder);
     }
 
+    /// <summary>
+    /// A frame must have a real picture. There is no maximum width or height:
+    /// 1440p, 4K, and larger are interpolated at native size.
+    /// </summary>
     public static bool IsSupportedSize(int width, int height) =>
-        width >= 2 && height >= 2 && Math.Max(width, height) <= MaxLongSide;
+        width >= 2 && height >= 2;
 
     public static bool IsSupportedDuration(TimeSpan duration) =>
         duration > TimeSpan.Zero && duration <= MaxSegmentDuration;

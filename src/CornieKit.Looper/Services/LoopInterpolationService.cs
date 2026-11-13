@@ -447,7 +447,10 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         catch (Exception ex)
         {
             Console.WriteLine($"[Interpolation] {ex.Message}");
-            Fail(segmentId, generation, "High frame rate smoothing failed. Playback stays on the original frames.");
+            var message = ex is OutOfMemoryException
+                ? "Not enough memory to smooth this loop, so playback stays on the original frames."
+                : "High frame rate smoothing failed. Playback stays on the original frames.";
+            Fail(segmentId, generation, message);
         }
         }
     }

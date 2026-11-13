@@ -172,6 +172,16 @@ public class InterpolationTests
     }
 
     [Fact]
+    public void Frame_size_is_not_capped_at_1080p()
+    {
+        Assert.True(InterpolationMath.IsSupportedSize(2560, 1440));
+        Assert.True(InterpolationMath.IsSupportedSize(3840, 2160));
+        Assert.True(InterpolationMath.IsSupportedSize(7680, 4320));
+        Assert.False(InterpolationMath.IsSupportedSize(1, 2160));
+        Assert.False(InterpolationMath.IsSupportedSize(1920, 0));
+    }
+
+    [Fact]
     public void Seam_keeps_the_opening_frames_for_the_wrap()
     {
         var seam = new SeamFrames();

@@ -93,7 +93,7 @@ jobs:
           Requires 64-bit Windows 10 or Windows 11.
 
           ### Changes
-          - **High frame rate loops.** While a segment repeats, the app builds a 2x RIFE smooth version in the background and keeps playing the original frames until it is ready. The smooth version stays in memory, including the frames that start the next repeat, and is drawn on its own timer. A lightning mark appears on that segment when the loop is ready. The lightning button at the top of the segment panel turns automatic interpolation on or off. Needs a DirectX 12 GPU. Without one, playback stays on the original frames.
+          - **High frame rate loops.** While a segment repeats, the app builds a 2x RIFE smooth version in the background at the video's own resolution, including 1440p and 4K, and keeps playing the original frames until it is ready. The smooth version stays in memory, including the frames that start the next repeat, and is drawn on its own timer. A lightning mark appears on that segment when the loop is ready. The lightning button at the top of the segment panel turns automatic interpolation on or off. Needs a DirectX 12 GPU. Without one, playback stays on the original frames. Segments longer than 120 seconds stay on the original frames.
           - **Clear invalid cache.** The top-left menu item 清除无效缓存 deletes smooth-loop caches whose video file is gone.
           - **Picture adjustments no longer ghost.** Sharpen, color temperature, and the other color controls no longer leave a double image or trail.
           - **Instant close.** Clicking the window X, Alt+F4, or Exit closes the app immediately.
@@ -104,4 +104,4 @@ jobs:
           "@
           $notes = $notes -replace "(?m)^          ", ""
           Set-Content -Path release-notes.md -Value $notes.Trim() -Encoding utf8
-          gh release create $tag $zip --title "$tag - Auto interpolation toggle" --notes-file release-notes.md
+          gh release create $tag $zip --title "$tag - Interpolate at any resolution" --notes-file release-notes.md
