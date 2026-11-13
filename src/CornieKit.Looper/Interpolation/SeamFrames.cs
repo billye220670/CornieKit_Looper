@@ -31,7 +31,9 @@ public sealed class SeamFrames
 
     public int NextMissing(int frameCount)
     {
-        var limit = Math.Min(Count, frameCount);
+        if (frameCount <= 0 || _frames.Length == 0)
+            return -1;
+        var limit = Math.Min(frameCount, _frames.Length);
         for (var i = 0; i < limit; i++)
         {
             if (_frames[i] == null)

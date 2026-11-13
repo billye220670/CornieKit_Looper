@@ -181,7 +181,9 @@ public sealed class InterpolationCacheStore
         File.Move(tempFrames, framesPath, overwrite: true);
         manifest.FrameCount = frames.Count;
         var manifestPath = Path.Combine(dir, "manifest.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, _json));
+        var tempManifest = manifestPath + ".tmp";
+        File.WriteAllText(tempManifest, JsonSerializer.Serialize(manifest, _json));
+        File.Move(tempManifest, manifestPath, overwrite: true);
     }
 
     /// <summary>

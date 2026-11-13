@@ -687,6 +687,40 @@
                                         <Rectangle Width="20" Height="20" Fill="White"
                                                    OpacityMask="{Binding SelectedLoopMode, Converter={StaticResource LoopModeToIconConverter}}"/>
                                     </Button>
+                                    <Button Style="{StaticResource OverlayButton}"
+                                            Command="{Binding ToggleAutoInterpolationCommand}"
+                                            AutomationProperties.Name="自动插帧"
+                                            Width="36" Height="36"
+                                            Margin="4,0,0,0">
+                                        <Button.ToolTip>
+                                            <TextBlock>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="开启自动插帧"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding AutoInterpolation, Mode=OneWay}" Value="True">
+                                                                <Setter Property="Text" Value="关闭自动插帧"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Button.ToolTip>
+                                        <Viewbox Width="14" Height="18">
+                                            <Path Data="M7,0 L2,8 L6,8 L3,16 L12,6 L7,6 Z">
+                                                <Path.Style>
+                                                    <Style TargetType="Path">
+                                                        <Setter Property="Fill" Value="#666666"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding AutoInterpolation, Mode=OneWay}" Value="True">
+                                                                <Setter Property="Fill" Value="#4A90E2"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Path.Style>
+                                            </Path>
+                                        </Viewbox>
+                                    </Button>
                                 </StackPanel>
                                 <TextBlock Text="Tab to hide"
                                            Foreground="#666666"

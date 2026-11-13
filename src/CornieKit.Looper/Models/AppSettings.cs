@@ -15,4 +15,10 @@ public class AppSettings
     /// does not consult this flag.
     /// </summary>
     public bool IsMuted { get; set; } = false;
+
+    /// <summary>
+    /// When true, the looping segment is interpolated in the background.
+    /// Missing values in older settings files stay on, which is this default.
+    /// </summary>
+    public bool AutoInterpolation { get; set; } = true;
 }

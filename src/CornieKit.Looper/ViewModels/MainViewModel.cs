@@ -180,6 +180,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isPlayingAllSegments;
 
+    /// <summary>
+    /// Background 2× interpolation of the looping segment. Persisted. Default on.
+    /// </summary>
+    [ObservableProperty]
+    private bool _autoInterpolation = true;
+
+    partial void OnAutoInterpolationChanged(bool value)
+    {
+        _appSettings.Settings.AutoInterpolation = value;
+        _appSettings.Save();
+        _loops.SetAutoInterpolation(value);
+        if (!value)
+        {
+            RefreshSmoothIcons();
+            return;
+        }
+        var segment = _segmentManager.CurrentSegment;
+        if (segment != null && IsPlayingAllSegments && !string.IsNullOrEmpty(CurrentVideoPath))
+            _loops.Watch(segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
+    }
+
+    [RelayCommand]
+    private void ToggleAutoInterpolation() => AutoInterpolation = !AutoInterpolation;
+
     partial void OnIsPlayingAllSegmentsChanged(bool value)
     {
         // 确保UI响应列表播放状态变化
@@ -218,6 +242,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _loops.Watch(segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
         };
         _videoPlayer.SegmentLoopStopped += (_, _) => _loops.StopPresenting();
+        _autoInterpolation = _appSettings.Settings.AutoInterpolation;
+        _loops.SetAutoInterpolation(_autoInterpolation);
 
         // VideoPlayer 在 InitializeAsync() 中异步初始化，不在此处阻塞
         StatusMessage = "Initializing player...";
@@ -1423,6 +1449,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // CancellationTokenSource already disposed, ignore
         }
 
+        // Closes the cache file and drops in-flight capture. The DirectML session
+        // is left for TerminateProcess; disposing it here can block the UI thread.
         _loops.Reset();
         _videoPlayer.Abandon();
     }

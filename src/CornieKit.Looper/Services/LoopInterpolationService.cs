@@ -33,6 +33,8 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private const long ResidentByteBudget = 192L * 1024 * 1024;
     private byte[][]? _resident;
     private int _residentStarted;
+    private int _auto = 1;
+    private int _captureEpoch;
     private readonly LoopPlaybackClock _clock = new();
     private byte[]? _decodeScratch;
     private byte[]? _jpegScratch;
@@ -84,8 +86,24 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
     public void NotePlaybackRunning(bool running) => _clock.SetRunning(running);
 
+    /// <summary>
+    /// Automatic interpolation. Off cancels capture and RIFE work and stops
+    /// presenting. Finished caches and their lightning marks are left alone.
+    /// </summary>
+    public void SetAutoInterpolation(bool enabled)
+    {
+        Volatile.Write(ref _auto, enabled ? 1 : 0);
+        if (!enabled)
+            CancelAutomaticWork();
+    }
+
     public void Watch(LoopSegment segment, string videoPath, double fps)
     {
+        if (Volatile.Read(ref _auto) == 0)
+        {
+            StopPresenting();
+            return;
+        }
         if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
             return;
         if (!InterpolationMath.IsSupportedDuration(segment.Duration))
@@ -145,14 +163,24 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
     public void Reset()
     {
+        // Stop work and close the cache file. Do not dispose the ONNX / DirectML
+        // session here: that teardown can block, and quit uses TerminateProcess
+        // so the OS reclaims the GPU memory.
+        CancelAutomaticWork();
+        lock (_gate)
+            _segmentId = Guid.Empty;
+    }
+
+    private void CancelAutomaticWork()
+    {
         TaskCompletionSource previous;
         lock (_gate)
         {
             _generation++;
+            _captureEpoch++;
             _phase = Phase.Idle;
             _presenting = false;
             _wantsCapture = false;
-            _segmentId = Guid.Empty;
             _reader?.Dispose();
             _reader = null;
             _frameCount = 0;
@@ -181,6 +209,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     {
         if (!WantsCapture || !InterpolationMath.IsSupportedSize(width, height) || pixels.Length == 0)
             return;
+        var epoch = Volatile.Read(ref _captureEpoch);
         var row = width * 4;
         byte[] tight;
         if (stride == row && pixels.Length >= row * height)
@@ -191,7 +220,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             for (var y = 0; y < height; y++)
                 pixels.AsSpan(y * stride, row).CopyTo(tight.AsSpan(y * row, row));
         }
-        _incoming.Writer.TryWrite(new CapturedRaw(tight, width, height, mediaTime));
+        _incoming.Writer.TryWrite(new CapturedRaw(tight, width, height, mediaTime, epoch));
     }
 
     public bool TryCopyPresentedFrame(Span<byte> destination, out int width, out int height)
@@ -240,9 +269,14 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
     private void StartCapture(LoopSegment segment, string videoPath, string hash, double fps)
     {
+        if (Volatile.Read(ref _auto) == 0)
+            return;
         lock (_gate)
         {
+            if (Volatile.Read(ref _auto) == 0)
+                return;
             _generation++;
+            _captureEpoch++;
             _presenting = false;
             _reader?.Dispose();
             _reader = null;
@@ -334,7 +368,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 if (!_reportedGpu)
                 {
                     _reportedGpu = true;
-                    Fail(segmentId, "High frame rate smoothing needs a DirectX 12 GPU, so this loop stays at the original frame rate.");
+                    Fail(segmentId, generation, "High frame rate smoothing needs a DirectX 12 GPU, so this loop stays at the original frame rate.");
                 }
                 else
                 {
@@ -380,7 +414,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
             if (!_store.TryOpen(path, hash, start, end, _codec.Id, out var reader) || reader == null)
             {
-                Fail(segmentId, "The smoothed loop could not be saved.");
+                Fail(segmentId, generation, "The smoothed loop could not be saved.");
                 continue;
             }
             lock (_gate)
@@ -413,7 +447,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         catch (Exception ex)
         {
             Console.WriteLine($"[Interpolation] {ex.Message}");
-            Fail(segmentId, "High frame rate smoothing failed. Playback stays on the original frames.");
+            Fail(segmentId, generation, "High frame rate smoothing failed. Playback stays on the original frames.");
         }
         }
     }
@@ -422,11 +456,13 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     {
         try
         {
-            await foreach (var frame in _incoming.Reader.ReadAllAsync(token))
-            {
-                try
+                await foreach (var frame in _incoming.Reader.ReadAllAsync(token))
                 {
-                    var encoded = _codec.Encode(frame.Bgra, frame.Width, frame.Height, frame.Width * 4);
+                    if (frame.Epoch != Volatile.Read(ref _captureEpoch))
+                        continue;
+                    try
+                    {
+                        var encoded = _codec.Encode(frame.Bgra, frame.Width, frame.Height, frame.Width * 4);
                     var complete = _collector.Add(frame.Time, encoded, frame.Width, frame.Height);
                     if (complete)
                         TryFinishCapture();
@@ -458,10 +494,12 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         done.TrySetResult();
     }
 
-    private void Fail(Guid segmentId, string message)
+    private void Fail(Guid segmentId, int generation, string message)
     {
         lock (_gate)
         {
+            if (generation != _generation)
+                return;
             _phase = Phase.Failed;
             _wantsCapture = false;
             _presenting = false;
@@ -491,13 +529,19 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         _codec.DecodeTo(jpeg.AsSpan(0, length), _frameWidth, _frameHeight, _decodeScratch!);
     }
 
-    private void LoadResident(InterpolationCacheReader reader)
+    private void LoadResident(InterpolationCacheReader reader, int generation)
     {
         try
         {
             var copy = reader.CopyAllIfAtMost(ResidentByteBudget);
-            if (copy != null)
+            if (copy == null)
+                return;
+            lock (_gate)
+            {
+                if (generation != _generation || !ReferenceEquals(_reader, reader))
+                    return;
                 _resident = copy;
+            }
         }
         catch (ObjectDisposedException)
         {
@@ -539,7 +583,10 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                     continue;
                 }
                 if (Interlocked.Exchange(ref _residentStarted, 1) == 0)
-                    _ = Task.Run(() => LoadResident(reader), token);
+                {
+                    var generation = VolatileGeneration();
+                    _ = Task.Run(() => LoadResident(reader, generation), token);
+                }
                 var playhead = IsPresenting ? PresentedFrameIndex : 0;
                 if (playhead < 0)
                     playhead = 0;
@@ -604,5 +651,5 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private static TaskCompletionSource NewTcs() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private readonly record struct CapturedRaw(byte[] Bgra, int Width, int Height, TimeSpan Time);
+    private readonly record struct CapturedRaw(byte[] Bgra, int Width, int Height, TimeSpan Time, int Epoch);
 }
