@@ -172,6 +172,33 @@ public class InterpolationTests
     }
 
     [Fact]
+    public void Seam_keeps_the_opening_frames_for_the_wrap()
+    {
+        var seam = new SeamFrames();
+        seam.Reset(1, 1);
+        Assert.Equal(0, seam.NextMissing(40));
+        seam.Write(0, new byte[] { 7, 0, 0, 0 });
+        seam.Write(0, new byte[] { 9, 0, 0, 0 });
+        var destination = new byte[4];
+        Assert.True(seam.TryCopy(0, destination));
+        Assert.Equal(7, destination[0]);
+        Assert.Equal(1, seam.NextMissing(40));
+        Assert.Equal(-1, seam.NextMissing(1));
+    }
+
+    [Fact]
+    public void Ring_does_not_reload_frames_the_seam_already_holds()
+    {
+        var ring = new DecodedFrameRing(4);
+        ring.Reset(1, 1);
+        ring.Write(2, new byte[] { 1, 0, 0, 0 });
+        Assert.Equal(3, ring.NextToDecode(0, 10, skipBelow: 2));
+        ring.Write(3, new byte[] { 2, 0, 0, 0 });
+        Assert.Equal(4, ring.NextToDecode(2, 10, skipBelow: 2));
+        Assert.Equal(-1, ring.NextToDecode(2, 4, skipBelow: 2));
+    }
+
+    [Fact]
     public void Collector_keeps_frames_when_the_clock_barely_moves()
     {
         var collector = new SegmentFrameCollector();

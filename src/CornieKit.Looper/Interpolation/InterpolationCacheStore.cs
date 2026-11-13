@@ -44,6 +44,31 @@ public sealed class InterpolationCacheReader : IDisposable
 
     public int EncodedLength(int index) => LengthOf(index);
 
+    public long EncodedBytes
+    {
+        get
+        {
+            long total = 0;
+            foreach (var length in _lengths)
+                total += length;
+            return total;
+        }
+    }
+
+    /// <summary>
+    /// Copies every encoded frame into memory when the cache is small enough
+    /// that playback can stop touching the disk.
+    /// </summary>
+    public byte[][]? CopyAllIfAtMost(long maxBytes)
+    {
+        if (EncodedBytes > maxBytes || _lengths.Length == 0)
+            return null;
+        var frames = new byte[_lengths.Length][];
+        for (var i = 0; i < frames.Length; i++)
+            frames[i] = Read(i);
+        return frames;
+    }
+
     public int ReadTo(int index, byte[] buffer)
     {
         var length = LengthOf(index);

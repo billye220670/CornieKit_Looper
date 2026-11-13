@@ -106,7 +106,7 @@ public sealed class DecodedFrameRing
     }
 
     /// <summary>The next frame index the decoder should produce, or -1 when the window is full.</summary>
-    public int NextToDecode(int playhead, int frameCount)
+    public int NextToDecode(int playhead, int frameCount, int skipBelow = 0)
     {
         if (frameCount <= 0)
             return -1;
@@ -117,6 +117,8 @@ public sealed class DecodedFrameRing
                 var index = playhead + ahead;
                 if (index >= frameCount)
                     index -= frameCount;
+                if (index < skipBelow)
+                    continue;
                 if (!SlotHas(index))
                     return index;
             }

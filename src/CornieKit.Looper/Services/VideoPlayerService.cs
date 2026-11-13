@@ -151,6 +151,13 @@ public class VideoPlayerService : IDisposable
         pitches = width * 4;
         lines = height;
 
+        // A loop seek asks LibVLC to renegotiate the format. Rebuilding the
+        // bitmap here blocks on the UI thread and replaces the picture the
+        // smooth loop is drawing into, which is the hitch at each repeat.
+        if (_videoBuffer != IntPtr.Zero && _videoSource != null
+            && _videoWidth == width && _videoHeight == height && width > 0 && height > 0)
+            return 1;
+
         // Allocate pinned buffer for VLC to decode into
         var bufferSize = pitches * lines;
         var buffer = new byte[bufferSize];

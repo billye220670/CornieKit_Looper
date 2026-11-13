@@ -29,6 +29,10 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private TaskCompletionSource _captureDone = NewTcs();
     private InterpolationCacheReader? _reader;
     private readonly DecodedFrameRing _ring = new(12);
+    private readonly SeamFrames _seam = new();
+    private const long ResidentByteBudget = 192L * 1024 * 1024;
+    private byte[][]? _resident;
+    private int _residentStarted;
     private readonly LoopPlaybackClock _clock = new();
     private byte[]? _decodeScratch;
     private byte[]? _jpegScratch;
@@ -153,6 +157,9 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _reader = null;
             _frameCount = 0;
             _ring.Clear();
+            _seam.Clear();
+            _resident = null;
+            _residentStarted = 0;
             previous = _captureDone;
             _captureDone = NewTcs();
         }
@@ -194,6 +201,8 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         var index = PresentedFrameIndex;
         if (index < 0)
             return false;
+        if (_seam.TryCopy(index, destination))
+            return true;
         return _ring.TryCopyLatest(index, _frameCount, destination);
     }
 
@@ -219,6 +228,9 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _frameHeight = reader.Manifest.Height;
             _frameCount = reader.Manifest.FrameCount;
             _ring.Reset(_frameWidth, _frameHeight);
+            _seam.Reset(_frameWidth, _frameHeight);
+            _resident = null;
+            _residentStarted = 0;
             EnsureDecodeScratch();
             _clock.Restart(segment.EndTime - segment.StartTime);
         }
@@ -385,6 +397,9 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 _frameHeight = height;
                 _frameCount = reader.Manifest.FrameCount;
                 _ring.Reset(width, height);
+                _seam.Reset(width, height);
+                _resident = null;
+                _residentStarted = 0;
                 EnsureDecodeScratch();
                 _presenting = false;
             }
@@ -462,6 +477,38 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _decodeScratch = new byte[bytes];
     }
 
+    private void DecodeIndex(InterpolationCacheReader reader, int index)
+    {
+        var resident = _resident;
+        if (resident != null && (uint)index < (uint)resident.Length && resident[index] != null)
+        {
+            _codec.DecodeTo(resident[index], _frameWidth, _frameHeight, _decodeScratch!);
+            return;
+        }
+        var length = reader.EncodedLength(index);
+        var jpeg = EnsureJpegScratch(length);
+        length = reader.ReadTo(index, jpeg);
+        _codec.DecodeTo(jpeg.AsSpan(0, length), _frameWidth, _frameHeight, _decodeScratch!);
+    }
+
+    private void LoadResident(InterpolationCacheReader reader)
+    {
+        try
+        {
+            var copy = reader.CopyAllIfAtMost(ResidentByteBudget);
+            if (copy != null)
+                _resident = copy;
+        }
+        catch (ObjectDisposedException)
+        {
+            // The segment changed and closed the file.
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Interpolation] Kept the loop on disk: {ex.Message}");
+        }
+    }
+
     private byte[] EnsureJpegScratch(int length)
     {
         if (_jpegScratch == null || _jpegScratch.Length < length)
@@ -484,19 +531,25 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 // Fill the ring before the loop is on screen, then stay ahead of
                 // the playhead. Waiting until the first present left the clock
                 // stepping through frames that were not decoded yet.
+                var seamNext = _seam.NextMissing(_frameCount);
+                if (seamNext >= 0)
+                {
+                    DecodeIndex(reader, seamNext);
+                    _seam.Write(seamNext, _decodeScratch);
+                    continue;
+                }
+                if (Interlocked.Exchange(ref _residentStarted, 1) == 0)
+                    _ = Task.Run(() => LoadResident(reader), token);
                 var playhead = IsPresenting ? PresentedFrameIndex : 0;
                 if (playhead < 0)
                     playhead = 0;
-                var next = _ring.NextToDecode(playhead, _frameCount);
+                var next = _ring.NextToDecode(playhead, _frameCount, SeamFrames.Count);
                 if (next < 0)
                 {
                     await Task.Delay(1, token);
                     continue;
                 }
-                var encodedLength = reader.EncodedLength(next);
-                var jpeg = EnsureJpegScratch(encodedLength);
-                encodedLength = reader.ReadTo(next, jpeg);
-                _codec.DecodeTo(jpeg.AsSpan(0, encodedLength), _frameWidth, _frameHeight, _decodeScratch);
+                DecodeIndex(reader, next);
                 _ring.Write(next, _decodeScratch);
             }
             catch (OperationCanceledException)
