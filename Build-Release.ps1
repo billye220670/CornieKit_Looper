@@ -4,7 +4,8 @@
 param(
     [string]$Version = "1.0.0",
     [string]$Configuration = "Release",
-    [string]$Runtime = "win-x64"
+    [string]$Runtime = "win-x64",
+    [switch]$SelfContained
 )
 
 Write-Host "CornieKit Looper Build & Package Script" -ForegroundColor Cyan
@@ -12,6 +13,7 @@ Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host "Version: $Version" -ForegroundColor Green
 Write-Host "Configuration: $Configuration" -ForegroundColor Green
 Write-Host "Runtime: $Runtime" -ForegroundColor Green
+Write-Host "Self-contained: $SelfContained" -ForegroundColor Green
 Write-Host ""
 
 # Define paths
@@ -38,13 +40,24 @@ if (Test-Path $zipPath) {
 
 # Build the project
 Write-Host "Building project..." -ForegroundColor Yellow
-dotnet publish $projectFile `
-    -c $Configuration `
-    -r $Runtime `
-    --self-contained false `
-    -o $publishDir `
-    /p:PublishSingleFile=false `
-    /p:PublishTrimmed=false
+$selfContainedValue = if ($SelfContained) { "true" } else { "false" }
+$publishArgs = @(
+    "publish", $projectFile,
+    "-c", $Configuration,
+    "-r", $Runtime,
+    "--self-contained", $selfContainedValue,
+    "-o", $publishDir,
+    "/p:PublishSingleFile=false",
+    "/p:PublishTrimmed=false"
+)
+if ($SelfContained) {
+    # ReadyToRun crossgen is unnecessary for a portable zip and fails more often in CI.
+    $publishArgs += "/p:PublishReadyToRun=false"
+    if ($Runtime -eq "win-x64") {
+        $publishArgs += "/p:VlcWindowsX86Enabled=false"
+    }
+}
+dotnet @publishArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
@@ -52,6 +65,27 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "  ✓ Build completed" -ForegroundColor Green
+
+# The player loads Effects\VideoAdjust.ps from the exe directory at startup.
+$shaderSource = Join-Path $projectRoot "src\CornieKit.Looper\Effects\VideoAdjust.ps"
+$shaderDestDir = Join-Path $publishDir "Effects"
+if (-not (Test-Path $shaderSource)) {
+    Write-Host "Error: pixel shader not found at $shaderSource" -ForegroundColor Red
+    exit 1
+}
+New-Item -ItemType Directory -Force -Path $shaderDestDir | Out-Null
+Copy-Item -Path $shaderSource -Destination (Join-Path $shaderDestDir "VideoAdjust.ps") -Force
+Write-Host "  ✓ Copied VideoAdjust.ps" -ForegroundColor Green
+
+$modelSource = Join-Path $projectRoot "src\CornieKit.Looper\Models\rife_v425lite.onnx"
+if (Test-Path $modelSource) {
+    $modelDestDir = Join-Path $publishDir "Models"
+    New-Item -ItemType Directory -Force -Path $modelDestDir | Out-Null
+    Copy-Item -Path $modelSource -Destination (Join-Path $modelDestDir "rife_v425lite.onnx") -Force
+    Write-Host "  ✓ Copied rife_v425lite.onnx" -ForegroundColor Green
+} else {
+    Write-Host "  ! RIFE model missing. High frame rate loops will stay on the original frames." -ForegroundColor Yellow
+}
 
 # Copy file association tools
 Write-Host "Copying file association tools..." -ForegroundColor Yellow
@@ -90,9 +124,20 @@ File Association (Optional):
 
 See FILE_ASSOCIATION_GUIDE.md for detailed instructions.
 
+Installation:
+1. Download the zip
+2. Extract it
+3. Run CornieKit.Looper.exe
+
+No installer.
+
 System Requirements:
-- Windows 10/11
-- .NET 8.0 Runtime (Download from: https://dotnet.microsoft.com/download/dotnet/8.0)
+- 64-bit Windows 10/11
+$(if ($SelfContained) {
+"- The .NET runtime is included in this zip. You do not need to install .NET."
+} else {
+"- .NET 8.0 Desktop Runtime (https://dotnet.microsoft.com/download/dotnet/8.0)"
+})
 
 Support:
 https://github.com/billye220670/CornieKit_Looper
@@ -102,9 +147,18 @@ $readmePath = Join-Path $publishDir "README.txt"
 Set-Content -Path $readmePath -Value $readmeContent -Encoding UTF8
 Write-Host "  ✓ Created README.txt" -ForegroundColor Green
 
-# Create ZIP archive
+# Create ZIP archive. tar handles the large self-contained output more reliably
+# than Compress-Archive.
 Write-Host "Creating ZIP archive..." -ForegroundColor Yellow
-Compress-Archive -Path "$publishDir\*" -DestinationPath $zipPath -Force
+if (Get-Command tar -ErrorAction SilentlyContinue) {
+    & tar -a -c -f $zipPath -C $publishDir .
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ! tar failed to create ZIP archive" -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Compress-Archive -Path "$publishDir\*" -DestinationPath $zipPath -Force
+}
 
 if (Test-Path $zipPath) {
     $zipSize = (Get-Item $zipPath).Length / 1MB

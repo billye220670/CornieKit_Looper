@@ -76,3 +76,6 @@ UpgradeLog*.htm
 
 # LibVLC binaries (these are restored from NuGet)
 **/libvlc/
+
+# RIFE weights are downloaded by the Windows release build.
+src/CornieKit.Looper/Models/*.onnx

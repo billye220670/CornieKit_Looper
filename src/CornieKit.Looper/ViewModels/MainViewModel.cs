@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Input;
@@ -19,6 +20,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DataPersistenceService _dataPersistence;
     private readonly RecentFilesService _recentFiles;
     private readonly AppSettingsService _appSettings;
+    private readonly LoopInterpolationService _loops;
 
     /// <summary>
     /// 上次非静音时的音量，用于解除静音时恢复到此值。
@@ -68,6 +70,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private const int SeekThrottleMs = 50;
     private bool _playingSingleSegment;
     private CancellationTokenSource? _loadCancellationToken;
+    private int _shutdownRequested;
     private TimeSpan? _pendingStartTime;
     private DateTime _lastMarkerSeekTime;
 
@@ -157,7 +160,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [ObservableProperty]
-    private int _currentVolume = 100;
+    private int _currentVolume;
 
     [ObservableProperty]
     private double _pendingStartMarkerPosition;
@@ -177,6 +180,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isPlayingAllSegments;
 
+    /// <summary>
+    /// Background 2× interpolation of the looping segment. Persisted. Default on.
+    /// </summary>
+    [ObservableProperty]
+    private bool _autoInterpolation = true;
+
+    partial void OnAutoInterpolationChanged(bool value)
+    {
+        _appSettings.Settings.AutoInterpolation = value;
+        _appSettings.Save();
+        _loops.SetAutoInterpolation(value);
+        if (!value)
+        {
+            RefreshSmoothIcons();
+            return;
+        }
+        var segment = _segmentManager.CurrentSegment;
+        if (segment != null && IsPlayingAllSegments && !string.IsNullOrEmpty(CurrentVideoPath))
+            _loops.Watch(segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
+    }
+
+    [RelayCommand]
+    private void ToggleAutoInterpolation() => AutoInterpolation = !AutoInterpolation;
+
     partial void OnIsPlayingAllSegmentsChanged(bool value)
     {
         // 确保UI响应列表播放状态变化
@@ -195,6 +222,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _dataPersistence = dataPersistence;
         _recentFiles = recentFiles;
         _appSettings = appSettings;
+        _loops = new LoopInterpolationService(
+            new Interpolation.InterpolationCacheStore(Interpolation.InterpolationCacheStore.DefaultRoot),
+            new JpegFrameCodec(),
+            new RifeFrameInterpolator());
+        _loops.MediaTime = () => _videoPlayer.SmoothedMediaTime;
+        _loops.Status += message => InvokeOnUi(() => StatusMessage = message);
+        _loops.SegmentReady += (id, ready) => InvokeOnUi(() =>
+        {
+            var vm = Segments.FirstOrDefault(s => s.Id == id);
+            if (vm != null)
+                vm.HasSmoothCache = ready;
+        });
+        _videoPlayer.FrameBridge = _loops;
+        _videoPlayer.SegmentPlaybackStarted += (_, segment) =>
+        {
+            if (Volatile.Read(ref _shutdownRequested) != 0 || string.IsNullOrEmpty(CurrentVideoPath))
+                return;
+            _loops.Watch(segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
+        };
+        _videoPlayer.SegmentLoopStopped += (_, _) => _loops.StopPresenting();
+        _autoInterpolation = _appSettings.Settings.AutoInterpolation;
+        _loops.SetAutoInterpolation(_autoInterpolation);
 
         // VideoPlayer 在 InitializeAsync() 中异步初始化，不在此处阻塞
         StatusMessage = "Initializing player...";
@@ -213,6 +262,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public async Task InitializeAsync()
     {
         await Task.Run(() => _videoPlayer.Initialize());
+        _videoPlayer.StartPresentationClock();
 
         // Subscribe to frame rendering for VideoSource updates
         _videoPlayer.FrameRendered += (s, e) =>
@@ -223,13 +273,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         };
 
-        // 恢复上次保存的音量与静音状态（全局持久化：跨视频、跨会话）
+        // Remember the saved audible level for unmute. Do not apply it:
+        // every video starts muted, including the first one after launch.
         var savedVolume = _appSettings.Settings.LastVolume;
-        var wasMuted = _appSettings.Settings.IsMuted;
         _lastNonZeroVolume = savedVolume > 0 ? savedVolume : 100;
-        var initialVolume = wasMuted ? 0 : _lastNonZeroVolume;
-        _videoPlayer.SetVolume(initialVolume);
-        CurrentVolume = initialVolume;
+        _videoPlayer.PrepareMutedOpen();
+        CurrentVolume = 0;
 
         _videoPlayer.PositionChanged += OnPositionChanged;
         _videoPlayer.PlaybackStarted += (s, e) => IsPlaying = true;
@@ -258,6 +307,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task LoadVideoAsync(string filePath)
     {
+        // Before any Play(), including the duration probe inside the player.
+        // Runs for every open path (dialog, recent, drag-drop, command line).
+        MuteForNewVideo();
+        _loops.Reset();
+
         // Cancel any previous loading operation
         _loadCancellationToken?.Cancel();
         _loadCancellationToken = new CancellationTokenSource();
@@ -383,7 +437,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void RefreshRecentFiles()
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             RecentFiles.Clear();
             foreach (var filePath in _recentFiles.RecentFiles)
@@ -755,6 +809,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// New videos start silent. The last audible level is kept so unmute restores it.
+    /// </summary>
+    internal void MuteForNewVideo()
+    {
+        if (CurrentVolume > 0)
+            _lastNonZeroVolume = CurrentVolume;
+
+        _videoPlayer.PrepareMutedOpen();
+        if (CurrentVolume != 0)
+            CurrentVolume = 0;
+    }
+
+    /// <summary>
     /// 切换静音状态：静音 → 恢复到上次非静音音量；非静音 → 静音（记录当前音量）。
     /// </summary>
     public void ToggleMute()
@@ -1022,6 +1089,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 刷新UI显示的时间文本
         playingVm.RefreshTimeTexts();
+        playingVm.HasSmoothCache = false;
+        _loops.Watch(playingVm.Segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
 
         // 保存到文件
         MarkDirtyAndSave();
@@ -1087,7 +1156,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnPositionChanged(object? sender, TimeSpan time)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             if (_isScrubbing)
                 return;
@@ -1107,7 +1176,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         // 单片段循环模式：VideoPlayerService 已自动 seek 回起点，不切换片段
         if (_playingSingleSegment)
+        {
+            _loops.OnLoopBoundary();
             return;
+        }
 
         var nextSegment = _segmentManager.GetNextSegment();
         if (nextSegment != null && nextSegment != _segmentManager.CurrentSegment)
@@ -1116,7 +1188,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _videoPlayer.PlaySegment(nextSegment);
 
             // 必须在UI线程上更新Observable属性和标记
-            Application.Current.Dispatcher.Invoke(() =>
+            InvokeOnUi(() =>
             {
                 UpdateSegmentPlayingState();
 
@@ -1132,7 +1204,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnPlaybackEnded(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             _updatingFromVideo = true;
             PlaybackPosition = 0;
@@ -1148,19 +1220,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnSegmentsChanged(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             Segments.Clear();
             foreach (var segment in _segmentManager.Segments)
             {
                 Segments.Add(new LoopSegmentViewModel(segment));
             }
+            RefreshSmoothIcons();
         });
+    }
+
+    private void RefreshSmoothIcons()
+    {
+        if (string.IsNullOrEmpty(CurrentVideoPath) || !File.Exists(CurrentVideoPath))
+            return;
+        foreach (var segmentVm in Segments)
+            segmentVm.HasSmoothCache = _loops.HasReadyCache(CurrentVideoPath, segmentVm.StartTime, segmentVm.EndTime);
+    }
+
+    [RelayCommand]
+    private void ClearInvalidInterpolationCache()
+    {
+        var removed = _loops.ClearMissingCaches();
+        StatusMessage = removed == 0
+            ? "没有无效的插帧缓存"
+            : $"已清除 {removed} 个无效插帧缓存";
     }
 
     private void OnCurrentSegmentChanged(object? sender, LoopSegment segment)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        InvokeOnUi(() =>
         {
             UpdateSegmentPlayingState();
         });
@@ -1185,9 +1275,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MarkDirtyAndSave();
     }
 
+    /// <summary>
+    /// Writes the current playback position when metadata is already dirty.
+    /// Quit does not call this: close must not wait on disk I/O. Edits are saved
+    /// as they happen via <see cref="MarkDirtyAndSave"/>.
+    /// </summary>
     public async Task SavePlaybackStateAsync()
     {
-        // 关闭时仅在有编辑（或加载时已存在元数据）才写入，避免"只看不编辑"生成 .cornieloop
         if (!_metadataDirty)
             return;
         await SaveMetadataAsync();
@@ -1338,8 +1432,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     #endregion
 
-    public void Dispose()
+    /// <summary>
+    /// Cancels in-flight load/save work and detaches player callbacks.
+    /// Does not stop or dispose LibVLC; that join deadlocks the UI thread.
+    /// </summary>
+    public void AbandonForShutdown()
     {
+        Volatile.Write(ref _shutdownRequested, 1);
+
         try
         {
             _loadCancellationToken?.Cancel();
@@ -1349,7 +1449,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // CancellationTokenSource already disposed, ignore
         }
 
-        _loadCancellationToken?.Dispose();
-        _videoPlayer?.Dispose();
+        // Closes the cache file and drops in-flight capture. The DirectML session
+        // is left for TerminateProcess; disposing it here can block the UI thread.
+        _loops.Reset();
+        _videoPlayer.Abandon();
+    }
+
+    public void Dispose()
+    {
+        AbandonForShutdown();
+    }
+
+    private void InvokeOnUi(Action action)
+    {
+        if (Volatile.Read(ref _shutdownRequested) != 0 || AppShutdown.IsExitRequested)
+            return;
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.HasShutdownStarted)
+            return;
+
+        dispatcher.Invoke(action);
     }
 }

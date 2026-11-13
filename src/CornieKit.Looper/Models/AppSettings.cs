@@ -11,7 +11,14 @@ public class AppSettings
     public int LastVolume { get; set; } = 100;
 
     /// <summary>
-    /// 上次退出时是否处于静音状态。
+    /// Last mute toggle the user made. Opening a video always starts muted and
+    /// does not consult this flag.
     /// </summary>
     public bool IsMuted { get; set; } = false;
+
+    /// <summary>
+    /// When true, the looping segment is interpolated in the background.
+    /// Missing values in older settings files stay on, which is this default.
+    /// </summary>
+    public bool AutoInterpolation { get; set; } = true;
 }

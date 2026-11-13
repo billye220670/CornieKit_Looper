@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- The helper has no WPF dependency, so these tests run without a Windows desktop.
+       The WPF project compiles the same file into the app. -->
+  <ItemGroup>
+    <Compile Include="..\CornieKit.Looper\Services\BgraFrameAlpha.cs" Link="BgraFrameAlpha.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\InterpolationMath.cs" Link="InterpolationMath.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\VideoFingerprint.cs" Link="VideoFingerprint.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\SegmentFrameCollector.cs" Link="SegmentFrameCollector.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\InterpolationCacheStore.cs" Link="InterpolationCacheStore.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\LoopPlaybackClock.cs" Link="LoopPlaybackClock.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\DecodedFrameRing.cs" Link="DecodedFrameRing.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\SeamFrames.cs" Link="SeamFrames.cs" />
+    <Compile Include="..\CornieKit.Looper\Services\JpegFrameCodec.cs" Link="JpegFrameCodec.cs" />
+  </ItemGroup>
+
+</Project>
