@@ -5,8 +5,9 @@
 //   c1  Saturation   x: [ 0,  2]   1.0 = neutral
 //   c2  Sharpness    x: [ 0,  2]   0.0 = off
 //   c3  Contrast     x: [0.5, 2]   1.0 = neutral
-//   c4  (DdxUV)      WPF-injected: x = 1/textureWidth
-//   c5  (DdyUV)      WPF-injected: y = 1/textureHeight
+//   c4  (TexelDelta) WPF DdxUvDdyUvRegisterIndex, ONE float4:
+//                    x = ddx(u), y = ddx(v), z = ddy(u), w = ddy(v)
+//                    c5 is intentionally unused. Do not read it.
 //   c6  Brightness   x: [-0.5, +0.5]  0.0 = neutral
 //   c7  Vignette     x: [ 0,   1]     0.0 = off
 //   c8  SkinTone     x: [-1,  +1]     0.0 = off
@@ -17,8 +18,7 @@ float4 Temperature : register(c0);
 float4 Saturation  : register(c1);
 float4 Sharpness   : register(c2);
 float4 Contrast    : register(c3);
-float4 DdxUV       : register(c4);  // (1/w, 0, 0, 0) from WPF DdxUvDdyUvRegisterIndex
-float4 DdyUV       : register(c5);  // (0, 1/h, 0, 0)
+float4 TexelDelta  : register(c4);  // (ddx(u), ddx(v), ddy(u), ddy(v))
 float4 Brightness  : register(c6);
 float4 Vignette    : register(c7);
 float4 SkinTone    : register(c8);
@@ -28,16 +28,22 @@ float4 main(float2 uv : TEXCOORD) : COLOR
     float4 orig  = tex2D(input, uv);
     float4 color = orig;
 
-    // ---- Sharpness: unsharp mask (4-tap cardinal) ----
+    // ---- Sharpness: centered 4-tap unsharp mask ----
+    // WPF packs both screen-space derivatives into c4. A second register is not
+    // filled; reading one pulls a stale constant and samples a shifted copy of
+    // the frame (a vertical ghost) into the unsharp mix.
+    // right/down include the cross-axis terms so the kernel stays on the pixel
+    // grid when the element is scaled. The four taps are symmetric, so a zero
+    // amount — and a flat area at any amount — does not shift the picture.
     float sharp = Sharpness.x;
     if (sharp > 0.001)
     {
-        float tx = DdxUV.x;
-        float ty = DdyUV.y;
-        float4 blur = (tex2D(input, uv + float2(0,  ty)) +
-                       tex2D(input, uv + float2(0, -ty)) +
-                       tex2D(input, uv + float2( tx, 0)) +
-                       tex2D(input, uv + float2(-tx, 0))) * 0.25;
+        float2 right = TexelDelta.xy;
+        float2 down  = TexelDelta.zw;
+        float4 blur = (tex2D(input, uv + down) +
+                       tex2D(input, uv - down) +
+                       tex2D(input, uv + right) +
+                       tex2D(input, uv - right)) * 0.25;
         color.rgb = saturate(color.rgb + (color.rgb - blur.rgb) * sharp);
     }
 
@@ -109,6 +115,11 @@ float4 main(float2 uv : TEXCOORD) : COLOR
         color.rgb *= vigFactor;
     }
 
-    color.a = orig.a;
+    // LibVLC RV32 writes real BGR with alpha 0. WPF composites ShaderEffect
+    // output with premultiplied SrcOver (src.rgb + dest.rgb * (1 - src.a)), so
+    // alpha 0 adds this frame onto whatever is already in the target — a second
+    // copy / trail as soon as an adjustment changes the RGB. Opaque output
+    // replaces the target. RGB is unchanged by this assignment.
+    color.a = 1;
     return color;
 }

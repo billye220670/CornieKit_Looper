@@ -29,11 +29,13 @@ A Windows video player for marking and looping video segments. Perfect for pract
 ## Installation
 
 ### Option 1: Download Release (Recommended)
-1. Download the latest `CornieKit_Looper_v1.3.0_win-x64.zip` from [Releases](https://github.com/billye220670/CornieKit_Looper/releases/latest)
-2. Extract to any folder
+1. Download the latest `CornieKit_Looper_v1.5.1_win-x64.zip` from [Releases](https://github.com/billye220670/CornieKit_Looper/releases/latest)
+2. Extract the zip
 3. Run `CornieKit.Looper.exe`
 
-**System Requirements**: Windows 10/11 + [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+No installer. The portable zip includes the .NET runtime, so you do not install .NET separately.
+
+**System Requirements**: 64-bit Windows 10/11
 
 ### Option 2: Build from Source
 Requires .NET 8.0 SDK.

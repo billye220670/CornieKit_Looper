@@ -46,7 +46,8 @@ public class VideoAdjustEffect : ShaderEffect
         DependencyProperty.Register(nameof(Contrast), typeof(double), typeof(VideoAdjustEffect),
             new UIPropertyMetadata(1.0, PixelShaderConstantCallback(3)));
 
-    // c4, c5 — reserved: WPF injects texel size via DdxUvDdyUvRegisterIndex = 4
+    // c4 — reserved. WPF writes (ddx(u), ddx(v), ddy(u), ddy(v)) into this one register.
+    // c5 must stay unbound; the shader does not read it.
 
     // c6 — Brightness  [-0.5, +0.5]
     public static readonly DependencyProperty BrightnessProperty =
@@ -66,7 +67,7 @@ public class VideoAdjustEffect : ShaderEffect
     public VideoAdjustEffect()
     {
         PixelShader = _shader;
-        DdxUvDdyUvRegisterIndex = 4; // WPF injects 1/texWidth into c4.x, 1/texHeight into c5.y
+        DdxUvDdyUvRegisterIndex = 4;
         UpdateShaderValue(InputProperty);
         UpdateShaderValue(TemperatureProperty);
         UpdateShaderValue(SaturationProperty);

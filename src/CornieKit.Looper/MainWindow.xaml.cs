@@ -10,6 +10,7 @@ using System.Windows.Media.Media3D;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.ComponentModel;
+using CornieKit.Looper.Services;
 using CornieKit.Looper.ViewModels;
 
 namespace CornieKit.Looper;
@@ -123,11 +124,24 @@ public partial class MainWindow : Window
         UpdateVideoTransforms();
     }
 
-    private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        // 在关闭前保存当前播放位置
-        await _viewModel.SavePlaybackStateAsync();
-        _viewModel.Dispose();
+        // Do not await SavePlaybackStateAsync and do not dispose LibVLC here.
+        // Both run on this thread: the save opens the video file before its first
+        // await, and MediaPlayer.Stop/Dispose join decoder threads that call back
+        // via Dispatcher.Invoke. Either one freezes the window on quit.
+        // Edits are already persisted by MarkDirtyAndSave. Exit abandons playback,
+        // decode, and any in-flight save so the process cannot stay running.
+        try
+        {
+            _viewModel.AbandonForShutdown();
+        }
+        catch
+        {
+            // Quitting must not depend on cleanup.
+        }
+
+        AppShutdown.ExitImmediately();
     }
 
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -1122,7 +1136,7 @@ public partial class MainWindow : Window
     {
         MessageBox.Show(
             "CornieKit Looper - Video Segment Loop Player\n\n" +
-            "Version 1.3.0\n\n" +
+            "Version 1.5.1\n\n" +
             "Controls:\n" +
             "• R - Hold to record segment\n" +
             "• 1 - Mark segment start point\n" +

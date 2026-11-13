@@ -281,12 +281,12 @@ VideoTranslateTransform.Y = -(centerY - 0.5) * renderH * zoom;
 | c1 | Saturation | [0, 2] | 1.0 |
 | c2 | Sharpness | [0, 2] | 0.0 |
 | c3 | Contrast | [0.5, 2] | 1.0 |
-| c4/c5 | DdxUV/DdyUV | WPF-injected texel size | — |
+| c4 | TexelDelta (ddx u, ddx v, ddy u, ddy v) | WPF-injected, one register | — |
 | c6 | Brightness | [-0.5, +0.5] | 0.0 |
 | c7 | Vignette | [0, 1] | 0.0 |
 | c8 | SkinTone | [-1, +1] | 0.0 |
 
-**`DdxUvDdyUvRegisterIndex = 4`** — WPF injects `1/textureWidth` into c4.x and `1/textureHeight` into c5.y; required for the unsharp mask (4-tap cardinal neighbor sampling).
+**`DdxUvDdyUvRegisterIndex = 4`** — WPF writes all four screen-space UV derivatives into c4 `(ddx(u), ddx(v), ddy(u), ddy(v))`. c5 is not filled. The unsharp mask steps by `c4.xy` and `c4.zw`.
 
 **Shader order of operations**: Sharpness → Brightness → Contrast → Temperature → Saturation → Skin Tone → Vignette
 

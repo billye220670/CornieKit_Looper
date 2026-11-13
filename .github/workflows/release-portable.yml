@@ -1,0 +1,92 @@
+name: Portable Windows release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Confirm fxc.exe is available
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter fxc.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.DirectoryName -match "x64" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $fxc) { throw "fxc.exe was not found. The pixel shader cannot be compiled." }
+          Write-Host "fxc.exe: $($fxc.FullName)"
+
+      - name: Build self-contained portable zip
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ($version.StartsWith("v")) { $version = $version.Substring(1) }
+          ./Build-Release.ps1 -Version $version -SelfContained
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "CornieKit_Looper_${tag}_win-x64.zip"
+          if (-not (Test-Path $zip)) { throw "Missing $zip" }
+          foreach ($required in @(
+            "publish\CornieKit.Looper.exe",
+            "publish\hostfxr.dll",
+            "publish\coreclr.dll",
+            "publish\libvlc\win-x64\libvlc.dll",
+            "publish\libvlc\win-x64\libvlccore.dll",
+            "publish\Effects\VideoAdjust.ps"
+          )) {
+            if (-not (Test-Path $required)) { throw "Missing $required" }
+          }
+          $shaderText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("publish\Effects\VideoAdjust.ps"))
+          if ($shaderText -notmatch "TexelDelta") { throw "VideoAdjust.ps was not recompiled from VideoAdjust.fx (missing TexelDelta)." }
+          if ($shaderText -match "DdyUV") { throw "VideoAdjust.ps still references DdyUV. fxc did not replace the patched shader." }
+          Get-Item $zip, publish\CornieKit.Looper.exe, publish\Effects\VideoAdjust.ps | Format-List FullName, Length
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "CornieKit_Looper_${tag}_win-x64.zip"
+          $notes = @"
+          ## CornieKit Looper $tag
+
+          Portable Windows build. No installer.
+
+          ### Install
+          1. Download ``$zip``
+          2. Extract the zip
+          3. Run ``CornieKit.Looper.exe``
+
+          The .NET runtime is included in the zip. You do not need to install .NET separately.
+          Requires 64-bit Windows 10 or Windows 11.
+
+          ### Changes
+          - **Picture adjustments no longer ghost.** Sharpen, color temperature, and the other color controls no longer leave a double image or trail. Turning an adjustment off leaves the picture unchanged.
+          - **Instant close.** Clicking the window X, Alt+F4, or Exit closes the app immediately instead of sometimes hanging as Not Responding.
+          - **Starts muted.** Every video opens muted, including the next file after you unmute. Mute, unmute, and the volume controls still work on the video that is open. Unmute restores your last audible level.
+
+          ### Run
+          Extract the zip and run ``CornieKit.Looper.exe``. There is no MSI, setup.exe, or other installer.
+          "@
+          $notes = $notes -replace "(?m)^          ", ""
+          Set-Content -Path release-notes.md -Value $notes.Trim() -Encoding utf8
+          gh release create $tag $zip --title "$tag - Ghosting fix, instant close, and default mute" --notes-file release-notes.md
