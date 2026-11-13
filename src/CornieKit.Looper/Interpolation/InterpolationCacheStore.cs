@@ -37,15 +37,31 @@ public sealed class InterpolationCacheReader : IDisposable
 
     public byte[] Read(int index)
     {
-        if (index < 0 || index >= _lengths.Length)
-            throw new ArgumentOutOfRangeException(nameof(index));
-        var bytes = new byte[_lengths[index]];
+        var bytes = new byte[LengthOf(index)];
+        ReadTo(index, bytes);
+        return bytes;
+    }
+
+    public int EncodedLength(int index) => LengthOf(index);
+
+    public int ReadTo(int index, byte[] buffer)
+    {
+        var length = LengthOf(index);
+        if (buffer.Length < length)
+            throw new ArgumentException("Buffer is smaller than the encoded frame.", nameof(buffer));
         lock (_stream)
         {
             _stream.Position = _offsets[index];
-            _stream.ReadExactly(bytes);
+            _stream.ReadExactly(buffer, 0, length);
         }
-        return bytes;
+        return length;
+    }
+
+    private int LengthOf(int index)
+    {
+        if ((uint)index >= (uint)_lengths.Length)
+            throw new ArgumentOutOfRangeException(nameof(index));
+        return _lengths[index];
     }
 
     public void Dispose() => _stream.Dispose();
@@ -100,7 +116,7 @@ public sealed class InterpolationCacheStore
 
         try
         {
-            var stream = new FileStream(framesPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var stream = new FileStream(framesPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan);
             if (!TryReadIndex(stream, manifest.FrameCount, out var offsets, out var lengths))
             {
                 stream.Dispose();

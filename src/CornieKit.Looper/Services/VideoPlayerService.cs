@@ -27,8 +27,11 @@ public class VideoPlayerService : IDisposable
     private readonly object _videoLock = new();
     private IInterpolatedFrameBridge? _frameBridge;
     private byte[]? _presentScratch;
+    private GCHandle _presentPin;
     private int _lastPresentedIndex = -1;
     private bool _renderHooked;
+    private System.Windows.Threading.DispatcherTimer? _presentTimer;
+    private int _hiResTimer;
     private TimeSpan _syncMedia;
     private long _syncStamp = Stopwatch.GetTimestamp();
     private double _sourceFrameRate = 30;
@@ -339,7 +342,32 @@ public class VideoPlayerService : IDisposable
         if (_renderHooked)
             return;
         _renderHooked = true;
+        // Rendering alone follows whatever else dirties the window. During
+        // playback that is mostly the 50 ms position text, so a cached loop
+        // was only copied about 20 times a second. The timer asks for a frame
+        // often enough to show every interpolated picture.
         System.Windows.Media.CompositionTarget.Rendering += (_, _) => BlitPresentedFrame();
+        _presentTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(8)
+        };
+        _presentTimer.Tick += (_, _) => OnPresentTick();
+        _presentTimer.Start();
+    }
+
+    private void OnPresentTick()
+    {
+        if (IsAbandoned)
+            return;
+        if (_frameBridge?.IsPresenting == true)
+        {
+            if (Interlocked.Exchange(ref _hiResTimer, 1) == 0)
+                TimeBeginPeriod(1);
+            BlitPresentedFrame();
+            return;
+        }
+        if (Interlocked.Exchange(ref _hiResTimer, 0) == 1)
+            TimeEndPeriod(1);
     }
 
     private void RememberFrameRate()
@@ -378,26 +406,41 @@ public class VideoPlayerService : IDisposable
         var index = bridge.PresentedFrameIndex;
         if (index < 0 || index == _lastPresentedIndex)
             return;
-        var needed = _videoSource.PixelWidth * _videoSource.PixelHeight * 4;
+        var width = _videoSource.PixelWidth;
+        var height = _videoSource.PixelHeight;
+        var needed = width * height * 4;
         if (needed <= 0)
             return;
-        if (_presentScratch == null || _presentScratch.Length < needed)
-            _presentScratch = new byte[needed];
-        if (!bridge.TryCopyPresentedFrame(_presentScratch, out var width, out var height))
+        var pinned = PinPresentScratch(needed);
+        if (!bridge.TryCopyPresentedFrame(_presentScratch!, out var frameWidth, out var frameHeight))
             return;
-        if (width != _videoSource.PixelWidth || height != _videoSource.PixelHeight)
+        if (frameWidth != width || frameHeight != height)
             return;
         _lastPresentedIndex = index;
         try
         {
+            // Same upload the original frames use. The scratch buffer is already
+            // decoded; this tick only copies it into the bitmap.
             _videoSource.Lock();
-            _videoSource.WritePixels(new Int32Rect(0, 0, width, height), _presentScratch, width * 4, 0);
+            _videoSource.WritePixels(new Int32Rect(0, 0, width, height), pinned, needed, width * 4);
             _videoSource.Unlock();
         }
         catch
         {
             // The bitmap can be replaced while a frame is being drawn.
         }
+    }
+
+    private IntPtr PinPresentScratch(int bytes)
+    {
+        if (_presentScratch == null || _presentScratch.Length < bytes)
+        {
+            if (_presentPin.IsAllocated)
+                _presentPin.Free();
+            _presentScratch = new byte[bytes];
+            _presentPin = GCHandle.Alloc(_presentScratch, GCHandleType.Pinned);
+        }
+        return _presentPin.AddrOfPinnedObject();
     }
 
     public void Play()
@@ -560,6 +603,9 @@ public class VideoPlayerService : IDisposable
         try
         {
             _positionTimer?.Stop();
+            _presentTimer?.Stop();
+            if (Interlocked.Exchange(ref _hiResTimer, 0) == 1)
+                TimeEndPeriod(1);
         }
         catch
         {
@@ -581,4 +627,10 @@ public class VideoPlayerService : IDisposable
     }
 
     private bool IsAbandoned => Volatile.Read(ref _abandoned) != 0;
+
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint TimeBeginPeriod(uint period);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    private static extern uint TimeEndPeriod(uint period);
 }

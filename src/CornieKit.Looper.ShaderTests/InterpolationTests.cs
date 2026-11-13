@@ -1,4 +1,5 @@
 using CornieKit.Looper.Interpolation;
+using CornieKit.Looper.Services;
 
 namespace CornieKit.Looper.ShaderTests;
 
@@ -155,6 +156,73 @@ public class InterpolationTests
         Assert.False(ring.Contains(0));
         Assert.True(ring.Contains(3));
         Assert.Equal(4, ring.NextToDecode(2, 6));
+    }
+
+    [Fact]
+    public void Ring_shows_the_newest_ready_frame_when_the_exact_index_is_still_decoding()
+    {
+        var ring = new DecodedFrameRing(4);
+        ring.Reset(1, 1);
+        ring.Write(0, new byte[] { 1, 0, 0, 0 });
+        ring.Write(1, new byte[] { 2, 0, 0, 0 });
+        var destination = new byte[4];
+        Assert.True(ring.TryCopyLatest(3, 8, destination));
+        Assert.Equal(2, destination[0]);
+        Assert.False(ring.TryCopyLatest(6, 8, destination));
+    }
+
+    [Fact]
+    public void Sparse_capture_is_rejected_and_a_near_full_capture_is_kept()
+    {
+        var duration = TimeSpan.FromSeconds(1);
+        Assert.False(InterpolationMath.CaptureCoversSourceRate(18, duration, 30));
+        Assert.True(InterpolationMath.CaptureCoversSourceRate(24, duration, 30));
+        Assert.True(InterpolationMath.CaptureCoversSourceRate(60, duration, 30));
+    }
+
+    [Fact]
+    public void Jpeg_roundtrip_keeps_color_and_opaque_alpha_and_decodes_into_the_same_buffer()
+    {
+        const int width = 64;
+        const int height = 64;
+        var source = new byte[width * height * 4];
+        for (var i = 0; i < source.Length; i += 4)
+        {
+            source[i] = 20;
+            source[i + 1] = 180;
+            source[i + 2] = 40;
+            source[i + 3] = 0;
+        }
+        var codec = new JpegFrameCodec();
+        var encoded = codec.Encode(source, width, height, width * 4);
+        var destination = new byte[source.Length];
+        codec.DecodeTo(encoded, width, height, destination);
+        codec.DecodeTo(encoded, width, height, destination);
+        Assert.Equal(255, destination[3]);
+        Assert.InRange(destination[0], 10, 35);
+        Assert.InRange(destination[1], 165, 195);
+        Assert.InRange(destination[2], 25, 55);
+    }
+
+    [Fact]
+    public void Jpeg_1080p_decode_is_fast_enough_for_sixty_frames_per_second()
+    {
+        const int width = 1920;
+        const int height = 1080;
+        var source = new byte[width * height * 4];
+        for (var i = 0; i < source.Length; i += 64)
+            source[i] = (byte)(i / 64);
+        var codec = new JpegFrameCodec();
+        var encoded = codec.Encode(source, width, height, width * 4);
+        var destination = new byte[source.Length];
+        codec.DecodeTo(encoded, width, height, destination);
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        const int passes = 8;
+        for (var i = 0; i < passes; i++)
+            codec.DecodeTo(encoded, width, height, destination);
+        started.Stop();
+        var averageMs = started.Elapsed.TotalMilliseconds / passes;
+        Assert.True(averageMs < 16, $"1080p JPEG decode averaged {averageMs:F1} ms, which cannot feed a 60 fps loop.");
     }
 
     [Fact]

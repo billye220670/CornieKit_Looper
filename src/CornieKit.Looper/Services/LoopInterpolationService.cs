@@ -16,7 +16,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private readonly IFrameCodec _codec;
     private readonly RifeFrameInterpolator _rife;
     private readonly SegmentFrameCollector _collector = new();
-    private readonly Channel<CapturedRaw> _incoming = Channel.CreateBounded<CapturedRaw>(new BoundedChannelOptions(8)
+    private readonly Channel<CapturedRaw> _incoming = Channel.CreateBounded<CapturedRaw>(new BoundedChannelOptions(32)
     {
         FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
@@ -28,9 +28,11 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private Task? _pump;
     private TaskCompletionSource _captureDone = NewTcs();
     private InterpolationCacheReader? _reader;
-    private readonly DecodedFrameRing _ring = new(8);
+    private readonly DecodedFrameRing _ring = new(12);
     private readonly LoopPlaybackClock _clock = new();
     private byte[]? _decodeScratch;
+    private byte[]? _jpegScratch;
+    private int _thinPasses;
     private int _frameWidth;
     private int _frameHeight;
     private int _frameCount;
@@ -169,18 +171,19 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
     public int ClearMissingCaches() => _store.DeleteCachesForMissingVideos();
 
-    public void CaptureFrame(ReadOnlySpan<byte> pixels, int width, int height, int stride, TimeSpan mediaTime)
+    public void CaptureFrame(byte[] pixels, int width, int height, int stride, TimeSpan mediaTime)
     {
-        if (!WantsCapture || !InterpolationMath.IsSupportedSize(width, height))
+        if (!WantsCapture || !InterpolationMath.IsSupportedSize(width, height) || pixels.Length == 0)
             return;
-        var tight = new byte[width * height * 4];
         var row = width * 4;
-        if (stride == row)
-            pixels[..tight.Length].CopyTo(tight);
+        byte[] tight;
+        if (stride == row && pixels.Length >= row * height)
+            tight = pixels;
         else
         {
+            tight = new byte[width * height * 4];
             for (var y = 0; y < height; y++)
-                pixels.Slice(y * stride, row).CopyTo(tight.AsSpan(y * row, row));
+                pixels.AsSpan(y * stride, row).CopyTo(tight.AsSpan(y * row, row));
         }
         _incoming.Writer.TryWrite(new CapturedRaw(tight, width, height, mediaTime));
     }
@@ -192,7 +195,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         var index = PresentedFrameIndex;
         if (index < 0)
             return false;
-        return _ring.TryCopy(index, destination);
+        return _ring.TryCopyLatest(index, _frameCount, destination);
     }
 
     public void Dispose() => Reset();
@@ -201,6 +204,13 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     {
         if (!_store.TryOpen(videoPath, hash, segment.StartTime, segment.EndTime, _codec.Id, out var reader) || reader == null)
             return false;
+        var duration = segment.EndTime - segment.StartTime;
+        var sourceFrames = reader.Manifest.FrameCount / Math.Max(1, reader.Manifest.Scale);
+        if (!InterpolationMath.CaptureCoversSourceRate(sourceFrames, duration, reader.Manifest.SourceFps))
+        {
+            reader.Dispose();
+            return false;
+        }
         lock (_gate)
         {
             _reader?.Dispose();
@@ -238,6 +248,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _start = segment.StartTime;
             _end = segment.EndTime;
             _fps = fps is >= 1 and <= 240 ? fps : 30;
+            _thinPasses = 0;
             _phase = Phase.Capturing;
             _wantsCapture = true;
             _collector.Reset(_start, _end);
@@ -271,6 +282,14 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 continue;
             }
 
+            lock (_gate)
+            {
+                // The signal has been consumed. Leave a fresh task so this loop
+                // waits for the next pass instead of spinning on the completed one.
+                if (ReferenceEquals(_captureDone, done))
+                    _captureDone = NewTcs();
+            }
+
             byte[][] sources;
             int width;
             int height;
@@ -295,6 +314,39 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 start = _start;
                 end = _end;
                 fps = _fps;
+            }
+
+            if (!InterpolationMath.CaptureCoversSourceRate(sources.Length, end - start, fps))
+            {
+                var giveUp = false;
+                lock (_gate)
+                {
+                    if (generation != _generation)
+                        continue;
+                    _thinPasses++;
+                    giveUp = _thinPasses >= 2;
+                    if (giveUp)
+                    {
+                        _phase = Phase.Failed;
+                        _wantsCapture = false;
+                    }
+                    else
+                    {
+                        _phase = Phase.Capturing;
+                        _wantsCapture = true;
+                        _collector.Reset(start, end);
+                        _captureDone = NewTcs();
+                    }
+                }
+                if (giveUp)
+                    Status?.Invoke("This loop stays at the original frame rate.");
+                continue;
+            }
+
+            lock (_gate)
+            {
+                if (generation != _generation || _phase != Phase.Capturing)
+                    continue;
                 _phase = Phase.Interpolating;
                 _wantsCapture = false;
             }
@@ -436,26 +488,41 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _decodeScratch = new byte[bytes];
     }
 
+    private byte[] EnsureJpegScratch(int length)
+    {
+        if (_jpegScratch == null || _jpegScratch.Length < length)
+            _jpegScratch = new byte[Math.Max(length, 256 * 1024)];
+        return _jpegScratch;
+    }
+
     private async Task PresentLoop(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
             try
             {
-                if (!IsPresenting || _reader == null || _decodeScratch == null || _frameCount <= 0)
+                var reader = _reader;
+                if (reader == null || _decodeScratch == null || _frameCount <= 0)
                 {
                     await Task.Delay(15, token);
                     continue;
                 }
-                var playhead = PresentedFrameIndex;
+                // Fill the ring before the loop is on screen, then stay ahead of
+                // the playhead. Waiting until the first present left the clock
+                // stepping through frames that were not decoded yet.
+                var playhead = IsPresenting ? PresentedFrameIndex : 0;
+                if (playhead < 0)
+                    playhead = 0;
                 var next = _ring.NextToDecode(playhead, _frameCount);
                 if (next < 0)
                 {
-                    await Task.Delay(2, token);
+                    await Task.Delay(1, token);
                     continue;
                 }
-                var encoded = _reader.Read(next);
-                _codec.DecodeTo(encoded, _frameWidth, _frameHeight, _decodeScratch);
+                var encodedLength = reader.EncodedLength(next);
+                var jpeg = EnsureJpegScratch(encodedLength);
+                encodedLength = reader.ReadTo(next, jpeg);
+                _codec.DecodeTo(jpeg.AsSpan(0, encodedLength), _frameWidth, _frameHeight, _decodeScratch);
                 _ring.Write(next, _decodeScratch);
             }
             catch (OperationCanceledException)

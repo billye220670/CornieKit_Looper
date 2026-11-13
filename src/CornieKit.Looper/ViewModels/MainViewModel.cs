@@ -200,7 +200,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _appSettings = appSettings;
         _loops = new LoopInterpolationService(
             new Interpolation.InterpolationCacheStore(Interpolation.InterpolationCacheStore.DefaultRoot),
-            new WpfJpegFrameCodec(),
+            new JpegFrameCodec(),
             new RifeFrameInterpolator());
         _loops.MediaTime = () => _videoPlayer.SmoothedMediaTime;
         _loops.Status += message => InvokeOnUi(() => StatusMessage = message);

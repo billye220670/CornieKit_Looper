@@ -70,8 +70,38 @@ public sealed class DecodedFrameRing
             if (!SlotHas(frameIndex) || destination.Length < _bytes)
                 return false;
             var slot = frameIndex % Capacity;
+            if (slot < 0)
+                slot += Capacity;
             _slots[slot].AsSpan(0, _bytes).CopyTo(destination);
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Copies <paramref name="frameIndex"/> when it is ready, otherwise the newest
+    /// decoded frame at or before it. Playback must not skip the present just
+    /// because the exact index is one decode behind.
+    /// </summary>
+    public bool TryCopyLatest(int frameIndex, int frameCount, Span<byte> destination)
+    {
+        if (frameCount <= 0 || destination.Length < _bytes)
+            return false;
+        lock (_gate)
+        {
+            for (var back = 0; back < Capacity; back++)
+            {
+                var index = frameIndex - back;
+                if (index < 0)
+                    index += frameCount;
+                if ((uint)index >= (uint)frameCount || !SlotHas(index))
+                    continue;
+                var slot = index % Capacity;
+                if (slot < 0)
+                    slot += Capacity;
+                _slots[slot].AsSpan(0, _bytes).CopyTo(destination);
+                return true;
+            }
+            return false;
         }
     }
 
