@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>favicon.ico</ApplicationIcon>
 
-    <Version>1.5.2</Version>
-    <AssemblyVersion>1.5.2.0</AssemblyVersion>
-    <FileVersion>1.5.2.0</FileVersion>
+    <Version>1.5.3</Version>
+    <AssemblyVersion>1.5.3.0</AssemblyVersion>
+    <FileVersion>1.5.3.0</FileVersion>
     <Company>CornieKit</Company>
     <Product>CornieKit Looper</Product>
     <Description>Video Segment Loop Player - Mark and loop video segments with ease</Description>

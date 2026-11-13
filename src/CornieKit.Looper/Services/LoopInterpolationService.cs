@@ -28,10 +28,12 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     private Task? _pump;
     private TaskCompletionSource _captureDone = NewTcs();
     private InterpolationCacheReader? _reader;
-    private byte[]? _front;
-    private int _frontWidth;
-    private int _frontHeight;
-    private int _frontIndex = -1;
+    private readonly DecodedFrameRing _ring = new(8);
+    private readonly LoopPlaybackClock _clock = new();
+    private byte[]? _decodeScratch;
+    private int _frameWidth;
+    private int _frameHeight;
+    private int _frameCount;
     private string _videoPath = string.Empty;
     private string _videoHash = string.Empty;
     private Guid _segmentId;
@@ -64,6 +66,19 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
     public bool WantsCapture { get { lock (_gate) return _wantsCapture; } }
     public bool IsPresenting { get { lock (_gate) return _presenting; } }
 
+    public int PresentedFrameIndex
+    {
+        get
+        {
+            if (!IsPresenting || _frameCount <= 0)
+                return -1;
+            var time = _start + _clock.PositionInSegment();
+            return InterpolationMath.FrameIndex(time, _start, _end, _frameCount);
+        }
+    }
+
+    public void NotePlaybackRunning(bool running) => _clock.SetRunning(running);
+
     public void Watch(LoopSegment segment, string videoPath, double fps)
     {
         if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
@@ -92,6 +107,8 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             {
                 _presenting = true;
                 _phase = Phase.Idle;
+                _wantsCapture = false;
+                _clock.Restart(_end - _start);
                 return;
             }
         }
@@ -108,7 +125,7 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 _presenting = true;
                 _phase = Phase.Idle;
                 _wantsCapture = false;
-                EnsurePump();
+                _clock.Restart(_end - _start);
                 return;
             }
         }
@@ -133,8 +150,8 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _segmentId = Guid.Empty;
             _reader?.Dispose();
             _reader = null;
-            _front = null;
-            _frontIndex = -1;
+            _frameCount = 0;
+            _ring.Clear();
             previous = _captureDone;
             _captureDone = NewTcs();
         }
@@ -170,15 +187,12 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
 
     public bool TryCopyPresentedFrame(Span<byte> destination, out int width, out int height)
     {
-        lock (_gate)
-        {
-            width = _frontWidth;
-            height = _frontHeight;
-            if (!_presenting || _front == null || destination.Length < _front.Length)
-                return false;
-            _front.CopyTo(destination);
-            return true;
-        }
+        width = _frameWidth;
+        height = _frameHeight;
+        var index = PresentedFrameIndex;
+        if (index < 0)
+            return false;
+        return _ring.TryCopy(index, destination);
     }
 
     public void Dispose() => Reset();
@@ -199,8 +213,12 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             _phase = Phase.Idle;
             _wantsCapture = false;
             _presenting = InterpolationMath.PresentImmediately(cacheReadyAtStart: true);
-            _frontIndex = -1;
-            EnsurePump();
+            _frameWidth = reader.Manifest.Width;
+            _frameHeight = reader.Manifest.Height;
+            _frameCount = reader.Manifest.FrameCount;
+            _ring.Reset(_frameWidth, _frameHeight);
+            EnsureDecodeScratch();
+            _clock.Restart(segment.EndTime - segment.StartTime);
         }
         SegmentReady?.Invoke(segment.Id, true);
         return true;
@@ -347,7 +365,11 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
                 _reader?.Dispose();
                 _reader = reader;
                 _phase = Phase.PendingSwitch;
-                _frontIndex = -1;
+                _frameWidth = width;
+                _frameHeight = height;
+                _frameCount = reader.Manifest.FrameCount;
+                _ring.Reset(width, height);
+                EnsureDecodeScratch();
                 _presenting = false;
             }
             SegmentReady?.Invoke(segmentId, true);
@@ -407,9 +429,11 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         Status?.Invoke(message);
     }
 
-    private void EnsurePump()
+    private void EnsureDecodeScratch()
     {
-        // The present loop is started with the service and follows IsPresenting.
+        var bytes = _frameWidth * _frameHeight * 4;
+        if (bytes > 0 && (_decodeScratch == null || _decodeScratch.Length != bytes))
+            _decodeScratch = new byte[bytes];
     }
 
     private async Task PresentLoop(CancellationToken token)
@@ -418,26 +442,21 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
         {
             try
             {
-                if (!IsPresenting || MediaTime == null || _reader == null)
+                if (!IsPresenting || _reader == null || _decodeScratch == null || _frameCount <= 0)
                 {
-                    await Task.Delay(20, token);
+                    await Task.Delay(15, token);
                     continue;
                 }
-                var index = InterpolationMath.FrameIndex(MediaTime(), _start, _end, _reader.Manifest.FrameCount);
-                if (index == _frontIndex)
+                var playhead = PresentedFrameIndex;
+                var next = _ring.NextToDecode(playhead, _frameCount);
+                if (next < 0)
                 {
-                    await Task.Delay(4, token);
+                    await Task.Delay(2, token);
                     continue;
                 }
-                var encoded = _reader.Read(index);
-                var bgra = _codec.Decode(encoded, _reader.Manifest.Width, _reader.Manifest.Height);
-                lock (_gate)
-                {
-                    _front = bgra;
-                    _frontWidth = _reader.Manifest.Width;
-                    _frontHeight = _reader.Manifest.Height;
-                    _frontIndex = index;
-                }
+                var encoded = _reader.Read(next);
+                _codec.DecodeTo(encoded, _frameWidth, _frameHeight, _decodeScratch);
+                _ring.Write(next, _decodeScratch);
             }
             catch (OperationCanceledException)
             {
@@ -445,11 +464,11 @@ public sealed class LoopInterpolationService : IInterpolatedFrameBridge, IDispos
             }
             catch (ObjectDisposedException)
             {
-                return;
+                await Task.Delay(15, token);
             }
             catch
             {
-                await Task.Delay(30, token);
+                await Task.Delay(15, token);
             }
         }
     }

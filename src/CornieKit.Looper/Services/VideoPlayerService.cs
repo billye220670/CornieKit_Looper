@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media.Imaging;
-using System.Windows.Threading;
 using LibVLCSharp.Shared;
 using CornieKit.Looper.Interpolation;
 using CornieKit.Looper.Models;
@@ -27,8 +26,9 @@ public class VideoPlayerService : IDisposable
     private WriteableBitmap? _videoSource;
     private readonly object _videoLock = new();
     private IInterpolatedFrameBridge? _frameBridge;
-    private DispatcherTimer? _presentTimer;
     private byte[]? _presentScratch;
+    private int _lastPresentedIndex = -1;
+    private bool _renderHooked;
     private TimeSpan _syncMedia;
     private long _syncStamp = Stopwatch.GetTimestamp();
     private double _sourceFrameRate = 30;
@@ -52,6 +52,7 @@ public class VideoPlayerService : IDisposable
     }
 
     public event EventHandler<LoopSegment>? SegmentPlaybackStarted;
+    public event EventHandler? SegmentLoopStopped;
 
     public MediaPlayer? MediaPlayer => _mediaPlayer;
     public bool IsPlaying => _mediaPlayer?.IsPlaying ?? false;
@@ -204,6 +205,9 @@ public class VideoPlayerService : IDisposable
             return;
 
         var bridge = _frameBridge;
+        if (bridge?.IsPresenting == true)
+            return;
+
         if (bridge?.WantsCapture == true && _videoBuffer != IntPtr.Zero && _videoWidth > 0 && _videoHeight > 0)
         {
             try
@@ -239,9 +243,6 @@ public class VideoPlayerService : IDisposable
                 }
 
                 if (_videoSource == null || frame == null || buffer == IntPtr.Zero || width == 0 || height == 0)
-                    return;
-
-                if (_frameBridge?.IsPresenting == true)
                     return;
 
                 // RV32 leaves alpha at 0. Stamp 255 before the upload so the
@@ -335,11 +336,10 @@ public class VideoPlayerService : IDisposable
 
     public void StartPresentationClock()
     {
-        if (_presentTimer != null)
+        if (_renderHooked)
             return;
-        _presentTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(8) };
-        _presentTimer.Tick += (_, _) => BlitPresentedFrame();
-        _presentTimer.Start();
+        _renderHooked = true;
+        System.Windows.Media.CompositionTarget.Rendering += (_, _) => BlitPresentedFrame();
     }
 
     private void RememberFrameRate()
@@ -371,6 +371,12 @@ public class VideoPlayerService : IDisposable
     {
         var bridge = _frameBridge;
         if (IsAbandoned || bridge?.IsPresenting != true || _videoSource == null)
+        {
+            _lastPresentedIndex = -1;
+            return;
+        }
+        var index = bridge.PresentedFrameIndex;
+        if (index < 0 || index == _lastPresentedIndex)
             return;
         var needed = _videoSource.PixelWidth * _videoSource.PixelHeight * 4;
         if (needed <= 0)
@@ -381,6 +387,7 @@ public class VideoPlayerService : IDisposable
             return;
         if (width != _videoSource.PixelWidth || height != _videoSource.PixelHeight)
             return;
+        _lastPresentedIndex = index;
         try
         {
             _videoSource.Lock();
@@ -397,12 +404,14 @@ public class VideoPlayerService : IDisposable
     {
         _mediaPlayer?.Play();
         _positionTimer?.Start();
+        _frameBridge?.NotePlaybackRunning(true);
     }
 
     public void Pause()
     {
         _mediaPlayer?.Pause();
         _positionTimer?.Stop();
+        _frameBridge?.NotePlaybackRunning(false);
     }
 
     public void Stop()
@@ -410,6 +419,7 @@ public class VideoPlayerService : IDisposable
         _mediaPlayer?.Stop();
         _positionTimer?.Stop();
         _activeLoopSegment = null;
+        _frameBridge?.NotePlaybackRunning(false);
     }
 
     public void TogglePlayPause()
@@ -483,6 +493,7 @@ public class VideoPlayerService : IDisposable
     public void StopSegmentLoop()
     {
         _activeLoopSegment = null;
+        SegmentLoopStopped?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnPositionTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)

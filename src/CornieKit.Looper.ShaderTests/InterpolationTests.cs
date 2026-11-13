@@ -105,6 +105,59 @@ public class InterpolationTests
     }
 
     [Fact]
+    public void Playback_clock_advances_forward_and_pause_holds_the_position()
+    {
+        var clock = new LoopPlaybackClock();
+        clock.Restart(TimeSpan.FromSeconds(2));
+        var first = clock.PositionInSegment();
+        Thread.Sleep(30);
+        var second = clock.PositionInSegment();
+        Assert.True(second > first);
+        clock.SetRunning(false);
+        var held = clock.PositionInSegment();
+        Thread.Sleep(30);
+        Assert.Equal(held, clock.PositionInSegment());
+        clock.SetRunning(true);
+        Thread.Sleep(20);
+        Assert.True(clock.PositionInSegment() > held);
+    }
+
+    [Fact]
+    public void Playback_clock_wraps_inside_the_segment_without_a_backward_step()
+    {
+        var duration = TimeSpan.FromMilliseconds(100);
+        var previous = TimeSpan.Zero;
+        for (var ms = 0; ms < 100; ms += 10)
+        {
+            var position = LoopPlaybackClock.Wrap(TimeSpan.FromMilliseconds(ms), duration);
+            Assert.True(position >= previous);
+            previous = position;
+        }
+        Assert.Equal(TimeSpan.FromMilliseconds(5), LoopPlaybackClock.Wrap(TimeSpan.FromMilliseconds(105), duration));
+    }
+
+    [Fact]
+    public void Decoded_ring_serves_the_playhead_from_memory_and_reuses_slots()
+    {
+        var ring = new DecodedFrameRing(3);
+        ring.Reset(1, 1);
+        ring.Write(0, new byte[] { 1, 0, 0, 0 });
+        ring.Write(1, new byte[] { 2, 0, 0, 0 });
+        ring.Write(2, new byte[] { 3, 0, 0, 0 });
+        Assert.Equal(-1, ring.NextToDecode(0, 6));
+        Assert.Equal(-1, ring.NextToDecode(0, 3));
+
+        var destination = new byte[4];
+        Assert.True(ring.TryCopy(1, destination));
+        Assert.Equal(2, destination[0]);
+
+        ring.Write(3, new byte[] { 4, 0, 0, 0 });
+        Assert.False(ring.Contains(0));
+        Assert.True(ring.Contains(3));
+        Assert.Equal(4, ring.NextToDecode(2, 6));
+    }
+
+    [Fact]
     public void Fingerprint_changes_when_the_file_bytes_change()
     {
         var path = Path.Combine(Path.GetTempPath(), "cornie-fp-" + Guid.NewGuid().ToString("N"));

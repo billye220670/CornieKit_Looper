@@ -26,6 +26,8 @@
     <Compile Include="..\CornieKit.Looper\Interpolation\VideoFingerprint.cs" Link="VideoFingerprint.cs" />
     <Compile Include="..\CornieKit.Looper\Interpolation\SegmentFrameCollector.cs" Link="SegmentFrameCollector.cs" />
     <Compile Include="..\CornieKit.Looper\Interpolation\InterpolationCacheStore.cs" Link="InterpolationCacheStore.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\LoopPlaybackClock.cs" Link="LoopPlaybackClock.cs" />
+    <Compile Include="..\CornieKit.Looper\Interpolation\DecodedFrameRing.cs" Link="DecodedFrameRing.cs" />
   </ItemGroup>
 
 </Project>

@@ -9,6 +9,7 @@ public interface IFrameCodec
     string Id { get; }
     byte[] Encode(ReadOnlySpan<byte> bgra, int width, int height, int stride);
     byte[] Decode(ReadOnlySpan<byte> encoded, int width, int height);
+    void DecodeTo(ReadOnlySpan<byte> encoded, int width, int height, byte[] destination);
 }
 
 /// <summary>
@@ -32,12 +33,17 @@ public sealed class WpfJpegFrameCodec : IFrameCodec
 
     public byte[] Decode(ReadOnlySpan<byte> encoded, int width, int height)
     {
+        var pixels = new byte[width * height * 4];
+        DecodeTo(encoded, width, height, pixels);
+        return pixels;
+    }
+
+    public void DecodeTo(ReadOnlySpan<byte> encoded, int width, int height, byte[] destination)
+    {
         using var stream = new MemoryStream(encoded.ToArray(), writable: false);
         var decoder = new JpegBitmapDecoder(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
         var converted = new FormatConvertedBitmap(decoder.Frames[0], PixelFormats.Bgra32, null, 0);
-        var pixels = new byte[width * height * 4];
-        converted.CopyPixels(pixels, width * 4, 0);
-        return pixels;
+        converted.CopyPixels(destination, width * 4, 0);
     }
 
     private static byte[] Tight(ReadOnlySpan<byte> bgra, int width, int height, int stride)

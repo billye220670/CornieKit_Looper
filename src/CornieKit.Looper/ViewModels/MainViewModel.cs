@@ -217,6 +217,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             _loops.Watch(segment, CurrentVideoPath, _videoPlayer.SourceFrameRate);
         };
+        _videoPlayer.SegmentLoopStopped += (_, _) => _loops.StopPresenting();
 
         // VideoPlayer 在 InitializeAsync() 中异步初始化，不在此处阻塞
         StatusMessage = "Initializing player...";
